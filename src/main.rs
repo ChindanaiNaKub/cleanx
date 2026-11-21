@@ -535,10 +535,11 @@ fn space_view(
                         )
                         .child(
                             text(format!(
-                                "freed this session · {}",
+                                "held in quarantine {} · freed {}",
+                                scan::human(s.session.held_bytes()),
                                 scan::human(s.session.freed_bytes())
                             ))
-                            .key("freed-total")
+                            .key("held-total")
                             .font(type_::LABEL)
                             .color(oklch(0.82, 0.14, 155.0)),
                         ),
@@ -613,6 +614,14 @@ fn clean_view(
         el().key("clean-fire-off").h(0.0)
     };
 
+    let max_bytes = s
+        .session
+        .candidates()
+        .iter()
+        .map(|c| c.target.bytes)
+        .max()
+        .unwrap_or(1)
+        .max(1);
     let mut list = col().key("clean-list").gap(6.0);
     if s.session.candidates().is_empty() {
         list = list.child(
@@ -636,6 +645,12 @@ fn clean_view(
         } else {
             secondary
         };
+        let tag_color = match target.impact {
+            scan::Impact::Safe => oklch(0.78, 0.14, 155.0),
+            scan::Impact::Caution | scan::Impact::ViewOnly => oklch(0.82, 0.13, 70.0),
+            scan::Impact::HandsOff => oklch(0.72, 0.16, 30.0),
+        };
+        let bar_w = (90.0 * scan::fraction(target.bytes, max_bytes)).max(2.0);
         list = list.child(
             row()
                 .key(format!("row-{i}"))
@@ -709,6 +724,11 @@ fn clean_view(
                                 .font(type_::LABEL)
                                 .color(secondary)
                                 .truncate(),
+                        )
+                        .child(
+                            text(target.impact.tag())
+                                .font(type_::SECTION)
+                                .color(tag_color),
                         ),
                 )
                 .child(
@@ -721,7 +741,9 @@ fn clean_view(
                                 .color(ink),
                         )
                         .child(
-                            text(if c.undoable {
+                            text(if target.impact.view_only() {
+                                "VIEW ONLY"
+                            } else if c.undoable {
                                 target.kind.label()
                             } else {
                                 "NO UNDO"
@@ -729,6 +751,17 @@ fn clean_view(
                             .font(type_::SECTION)
                             .color(badge),
                         ),
+                )
+                .child(
+                    el().key(format!("row-bar-{i}"))
+                        .h(3.0)
+                        .w(bar_w)
+                        .radius(2.0)
+                        .fill(if on {
+                            oklch(0.78, 0.14, 155.0)
+                        } else {
+                            secondary.alpha(0.5)
+                        }),
                 ),
         );
     }
@@ -780,9 +813,14 @@ fn clean_view(
                         .color(ink),
                 )
                 .child(
-                    text("Only caches, temp files and OS junk. Undo lasts until you close cleanX.")
+                    text("Clean allow-listed items. Other large or hidden items are view only. Held bytes return on restart.")
                         .font(type_::BODY)
                         .color(secondary),
+                )
+                .child(
+                    text("Home scan is bounded to 30,000 entries and depth 6.")
+                        .font(type_::LABEL)
+                        .color(secondary.alpha(0.8)),
                 ),
         )
         .child(
@@ -812,10 +850,11 @@ fn clean_view(
                         )
                         .child(
                             text(format!(
-                                "freed this session · {}",
+                                "held in quarantine {} · freed {}",
+                                scan::human(s.session.held_bytes()),
                                 scan::human(s.session.freed_bytes())
                             ))
-                            .key("freed-clean")
+                            .key("held-clean")
                             .font(type_::LABEL)
                             .color(secondary),
                         )
@@ -936,7 +975,21 @@ mod tests {
             label: "App cache".into(),
             detail: "test".into(),
             kind: scan::Kind::Cache,
+            impact: scan::Impact::Safe,
             bytes: 4096,
+            tool: None,
+            default_on: true,
+        }
+    }
+
+    fn fake_view_target() -> scan::CleanTarget {
+        scan::CleanTarget {
+            path: std::path::PathBuf::from("/home/test/.config"),
+            label: "Config".into(),
+            detail: "view only".into(),
+            kind: scan::Kind::Meta,
+            impact: scan::Impact::HandsOff,
+            bytes: 1024,
             tool: None,
             default_on: true,
         }
@@ -1029,6 +1082,32 @@ mod tests {
         rt.pointer_up(x, y);
         rt.frame(0.0);
         assert!(!rt.state.session.candidates()[0].chosen);
+    }
+
+    #[test]
+    fn a_view_only_row_stays_unselected() {
+        let mut state = State::default();
+        state.tab = Tab::Clean;
+        state.session.set_candidates(vec![fake_view_target()]);
+        let mut rt = Runtime::new(state, view, (760.0, 600.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(rt.find("row-bar-0").is_some());
+        let (x, y) = rt.find("row-0").unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        assert!(!rt.state.session.candidates()[0].chosen);
+        assert!(!rt.state.session.armed());
+    }
+
+    #[test]
+    fn held_bytes_have_their_own_label() {
+        let mut state = State::default();
+        state.tab = Tab::Clean;
+        state.session.seed_undo_for_scene();
+        let mut rt = Runtime::new(state, view, (760.0, 600.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(rt.find("held-clean").is_some());
     }
 
     #[test]

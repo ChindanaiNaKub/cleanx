@@ -107,7 +107,7 @@ impl Session {
         self.candidates = targets
             .into_iter()
             .map(|t| Candidate {
-                chosen: t.default_on,
+                chosen: t.default_on && t.impact.cleanable(),
                 undoable: t.tool.is_none(),
                 target: t,
             })
@@ -156,13 +156,14 @@ impl Session {
         &self.history
     }
 
-    /// Derived from the undo list and completed tool runs. Nothing to keep in sync.
+    /// Still on disk in quarantine. These bytes return at the next start.
+    pub fn held_bytes(&self) -> u64 {
+        self.quarantine.iter().map(|q| q.target.bytes).sum::<u64>()
+    }
+
+    /// Returned to the volume by owning tools during this session.
     pub fn freed_bytes(&self) -> u64 {
-        self.quarantine
-            .iter()
-            .map(|q| q.target.bytes)
-            .sum::<u64>()
-            .saturating_add(self.tool_freed)
+        self.tool_freed
     }
 
     pub fn scan_progress(&self) -> f32 {
@@ -181,7 +182,12 @@ impl Session {
     }
 
     pub fn toggle(&mut self, i: usize) {
-        if let Some(c) = self.candidates.get_mut(i) {
+        if self
+            .candidates
+            .get(i)
+            .is_some_and(|c| c.target.impact.cleanable())
+        {
+            let c = &mut self.candidates[i];
             c.chosen = !c.chosen;
         }
         self.clean_phase = CleanPhase::Idle;
@@ -219,7 +225,7 @@ impl Session {
             .candidates
             .iter()
             .enumerate()
-            .filter(|(_, c)| c.chosen)
+            .filter(|(_, c)| c.chosen && c.target.impact.cleanable())
             .map(|(i, _)| i)
             .collect();
         // Parents first. A stashed parent already covers any selected child.
@@ -374,6 +380,7 @@ impl Session {
                 label: "Old session stash".into(),
                 detail: "Ready to restore".into(),
                 kind: scan::Kind::Cache,
+                impact: scan::Impact::Safe,
                 bytes: 1024 * 1024,
                 tool: None,
                 default_on: false,
@@ -426,6 +433,7 @@ mod tests {
             label: "Demo".into(),
             detail: "test".into(),
             kind: scan::Kind::Cache,
+            impact: scan::Impact::Safe,
             bytes: 4,
             tool: None,
             default_on: true,
@@ -435,13 +443,14 @@ mod tests {
         assert!(s.arm());
         let report = s.clean_with_home(&home);
         assert_eq!(report.path_items, 1);
-        assert_eq!(s.freed_bytes(), 4);
+        assert_eq!(s.held_bytes(), 4);
+        assert_eq!(s.freed_bytes(), 0);
         assert!(!dir.exists());
         assert_eq!(s.quarantine().len(), 1);
 
         let undo = s.undo_with_home(&home);
         assert_eq!(undo.restored, 1);
-        assert_eq!(s.freed_bytes(), 0);
+        assert_eq!(s.held_bytes(), 0);
         assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "keep");
         assert_eq!(s.candidates().len(), 1);
         assert!(!s.candidates()[0].chosen);
@@ -460,6 +469,7 @@ mod tests {
             label: "One".into(),
             detail: "test".into(),
             kind: scan::Kind::Cache,
+            impact: scan::Impact::Safe,
             bytes: 1,
             tool: None,
             default_on: true,
@@ -471,6 +481,7 @@ mod tests {
             label: "Two".into(),
             detail: "test".into(),
             kind: scan::Kind::Cache,
+            impact: scan::Impact::Safe,
             bytes: 1,
             tool: None,
             default_on: true,
@@ -493,6 +504,7 @@ mod tests {
             label: "Cache".into(),
             detail: "test".into(),
             kind: scan::Kind::Cache,
+            impact: scan::Impact::Safe,
             bytes,
             tool: None,
             default_on: true,
@@ -503,7 +515,7 @@ mod tests {
         let report = s.clean_with_home(&home);
         assert_eq!(report.path_items, 1);
         assert_eq!(report.failed, 0);
-        assert_eq!(s.freed_bytes(), 2);
+        assert_eq!(s.held_bytes(), 2);
         assert!(!home.join(".cache").exists());
         fs::remove_dir_all(base).unwrap();
     }
@@ -515,6 +527,7 @@ mod tests {
             label: "dnf".into(),
             detail: "test".into(),
             kind: scan::Kind::Cache,
+            impact: scan::Impact::Safe,
             bytes: 8,
             tool: Some(scan::Tool {
                 program: "dnf",
@@ -526,5 +539,32 @@ mod tests {
         let mut s = Session::new();
         s.set_candidates(vec![target]);
         assert!(!s.candidates()[0].undoable);
+    }
+
+    #[test]
+    fn a_view_only_item_cannot_be_selected_or_cleaned() {
+        let (base, home) = temp_home();
+        let dir = home.join(".config");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("settings"), b"x").unwrap();
+        let mut s = Session::new();
+        s.set_candidates(vec![scan::CleanTarget {
+            path: dir.clone(),
+            label: "Config".into(),
+            detail: "test".into(),
+            kind: scan::Kind::Meta,
+            impact: scan::Impact::HandsOff,
+            bytes: 1,
+            tool: None,
+            default_on: true,
+        }]);
+        assert!(!s.candidates()[0].chosen);
+        s.toggle(0);
+        assert!(!s.candidates()[0].chosen);
+        assert!(!s.arm());
+        let report = s.clean_with_home(&home);
+        assert_eq!(report.path_items, 0);
+        assert!(dir.exists());
+        fs::remove_dir_all(base).unwrap();
     }
 }

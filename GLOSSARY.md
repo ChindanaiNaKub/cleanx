@@ -12,6 +12,18 @@ _Avoid_: gauge, ring, dial, meter
 The disk space that cleanX reports as safely removable from its allow-list.
 _Avoid_: junk, garbage, debris
 
+**Held space**:
+Disk space still occupied by items cleanX has moved aside. It becomes free space only when the session's quarantine is cleared.
+_Avoid_: pending space, staged space, freed space
+
+**Freed space**:
+Disk space actually returned to the volume.
+_Avoid_: reclaimed space, saved space
+
+**Impact tag**:
+The label cleanX shows for how safe an item is to remove: safe, caution, or hands-off.
+_Avoid_: risk badge, severity, warning level
+
 **Safe clean**:
 A removal limited to allow-listed items, confirmed in two steps.
 _Avoid_: deep clean, purge, sweep

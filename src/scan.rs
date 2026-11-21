@@ -1,6 +1,7 @@
 //! Disk numbers and a strict allow-list of cleanable paths.
 //! No dependency outside the standard library: `df` on Unix, `std::fs` everywhere.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
@@ -37,6 +38,33 @@ impl Kind {
     }
 }
 
+/// One value decides the visible tag and the action cleanX may take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Impact {
+    Safe,
+    Caution,
+    ViewOnly,
+    HandsOff,
+}
+
+impl Impact {
+    pub fn tag(self) -> &'static str {
+        match self {
+            Impact::Safe => "SAFE",
+            Impact::Caution | Impact::ViewOnly => "CAUTION",
+            Impact::HandsOff => "HANDS OFF",
+        }
+    }
+
+    pub fn cleanable(self) -> bool {
+        matches!(self, Impact::Safe | Impact::Caution)
+    }
+
+    pub fn view_only(self) -> bool {
+        matches!(self, Impact::ViewOnly | Impact::HandsOff)
+    }
+}
+
 /// An owning tool that cleans its own cache instead of deleting files by hand.
 #[derive(Clone, Debug)]
 pub struct Tool {
@@ -51,6 +79,7 @@ pub struct CleanTarget {
     pub label: String,
     pub detail: String,
     pub kind: Kind,
+    pub impact: Impact,
     pub bytes: u64,
     /// Some means run the owning tool; None means remove the path.
     pub tool: Option<Tool>,
@@ -250,8 +279,33 @@ fn dir_size(path: &Path) -> u64 {
     dir_size_skip(path, None)
 }
 
-/// One bounded walk of the home directory finds the OS junk we recognise.
-fn discover(root: &Path, out: &mut Vec<CleanTarget>) {
+/// Floor for reporting a large file. Raise it when the list gets noisy.
+const LARGE_FILE_BYTES: u64 = 100 * 1024 * 1024;
+
+fn view_target(root: &Path, path: PathBuf, name: &str, bytes: u64, hands_off: bool) -> CleanTarget {
+    let detail = path
+        .strip_prefix(root)
+        .unwrap_or(&path)
+        .to_string_lossy()
+        .into_owned();
+    CleanTarget {
+        path,
+        label: name.to_string(),
+        detail,
+        kind: Kind::Meta,
+        impact: if hands_off {
+            Impact::HandsOff
+        } else {
+            Impact::ViewOnly
+        },
+        bytes,
+        tool: None,
+        default_on: false,
+    }
+}
+
+/// One bounded walk finds known junk and reports other large or hidden items.
+fn discover(root: &Path, known: &HashSet<PathBuf>, out: &mut Vec<CleanTarget>) {
     let private = home_dir().join(".local/share/cleanx");
     let mut stack = vec![(root.to_path_buf(), 0_u32)];
     let mut left = 30_000_u32;
@@ -276,6 +330,7 @@ fn discover(root: &Path, out: &mut Vec<CleanTarget>) {
                 label: ".DS_Store".into(),
                 detail: "Finder folder settings".into(),
                 kind: Kind::Meta,
+                impact: Impact::Safe,
                 bytes: md.len(),
                 tool: None,
                 default_on: true,
@@ -288,19 +343,33 @@ fn discover(root: &Path, out: &mut Vec<CleanTarget>) {
                 label: "node_modules".into(),
                 detail: "Reinstall with your package manager".into(),
                 kind: Kind::Build,
+                impact: Impact::Caution,
                 bytes: dir_size(&p),
                 tool: None,
                 default_on: false,
             });
             continue;
         }
+        if !known.contains(&p)
+            && (name.starts_with('.') || (md.is_file() && md.len() >= LARGE_FILE_BYTES))
+        {
+            let hands_off = name == ".config" || name == ".ssh" || name.starts_with(".local");
+            let bytes = if md.is_dir() { dir_size(&p) } else { md.len() };
+            out.push(view_target(root, p.clone(), name, bytes, hands_off));
+        }
         if md.is_dir()
             && depth < 6
             && let Ok(rd) = fs::read_dir(&p)
         {
-            for e in rd.flatten() {
-                stack.push((e.path(), depth + 1));
-            }
+            // LIFO stack. Push known junk and hidden names last so they are seen first.
+            let mut children: Vec<_> = rd.flatten().map(|e| (e.path(), depth + 1)).collect();
+            children.sort_by_key(|(child, _)| {
+                child
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with('.') || n == "node_modules")
+            });
+            stack.extend(children);
         }
     }
 }
@@ -350,6 +419,7 @@ pub fn tool_targets_with(has: impl Fn(&str) -> bool) -> Vec<CleanTarget> {
             label: "dnf package cache".into(),
             detail: "Cleaned with dnf clean packages".into(),
             kind: Kind::Cache,
+            impact: Impact::Safe,
             bytes: dir_size(Path::new("/var/cache/dnf")),
             tool: Some(Tool {
                 program: "dnf",
@@ -365,6 +435,7 @@ pub fn tool_targets_with(has: impl Fn(&str) -> bool) -> Vec<CleanTarget> {
             label: "Journal logs".into(),
             detail: "Trimmed to 200M with journalctl".into(),
             kind: Kind::Temp,
+            impact: Impact::Safe,
             bytes: journal_bytes(),
             tool: Some(Tool {
                 program: "journalctl",
@@ -382,6 +453,7 @@ pub fn tool_targets_with(has: impl Fn(&str) -> bool) -> Vec<CleanTarget> {
             label: "Flatpak unused runtimes".into(),
             detail: "Estimated from local Flatpak data".into(),
             kind: Kind::Cache,
+            impact: Impact::Safe,
             tool: Some(Tool {
                 program: "flatpak",
                 args: &["uninstall", "--unused", "--noninteractive", "-y"],
@@ -465,12 +537,17 @@ pub fn clean_targets() -> Vec<CleanTarget> {
             label: (*label).into(),
             detail: (*detail).into(),
             kind: *kind,
+            impact: Impact::Safe,
             tool: None,
             default_on: *default_on,
         });
     }
     if !home.as_os_str().is_empty() {
-        discover(&home, &mut out);
+        let known: HashSet<PathBuf> = RULES
+            .iter()
+            .map(|(rel, _, _, _, _)| home.join(rel))
+            .collect();
+        discover(&home, &known, &mut out);
     }
     out.extend(tool_targets());
     out.sort_by_key(|v| std::cmp::Reverse(v.bytes));
@@ -492,6 +569,9 @@ fn refused() -> io::Error {
 }
 
 fn valid_target(t: &CleanTarget, home: &Path) -> io::Result<()> {
+    if !t.impact.cleanable() {
+        return Err(refused());
+    }
     let md = fs::symlink_metadata(&t.path)?;
     if md.file_type().is_symlink() || !under_home(&t.path, home) {
         return Err(refused());
@@ -642,6 +722,7 @@ mod tests {
             label: "x".into(),
             detail: "x".into(),
             kind: Kind::Cache,
+            impact: Impact::Safe,
             bytes: 1,
             tool: None,
             default_on: false,
@@ -716,6 +797,7 @@ mod tests {
             label: "Demo".into(),
             detail: "test".into(),
             kind: Kind::Cache,
+            impact: Impact::Safe,
             bytes: 4,
             tool: None,
             default_on: true,
@@ -729,6 +811,40 @@ mod tests {
 
         restore_path(&dir, &stash, &home).unwrap();
         assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "kept");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn discovery_marks_hidden_and_large_items_view_only() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("cleanx-d-{}-{nanos}", std::process::id()));
+        let home = base.join("home");
+        fs::create_dir_all(home.join(".config")).unwrap();
+        fs::write(home.join(".config").join("settings"), b"x").unwrap();
+        fs::create_dir_all(home.join("work")).unwrap();
+        let big = home.join("work").join("big.bin");
+        fs::File::create(&big)
+            .unwrap()
+            .set_len(LARGE_FILE_BYTES + 1)
+            .unwrap();
+
+        let mut out = Vec::new();
+        discover(&home, &HashSet::new(), &mut out);
+
+        let config = out.iter().find(|t| t.label == ".config").unwrap();
+        assert_eq!(config.impact, Impact::HandsOff);
+        assert_eq!(config.impact.tag(), "HANDS OFF");
+        assert!(!config.impact.cleanable());
+        assert!(quarantine_target(config, &home).is_err());
+
+        let large = out.iter().find(|t| t.label == "big.bin").unwrap();
+        assert_eq!(large.impact, Impact::ViewOnly);
+        assert_eq!(large.impact.tag(), "CAUTION");
+        assert!(!large.impact.cleanable());
+        assert!(large.bytes >= LARGE_FILE_BYTES);
         fs::remove_dir_all(base).unwrap();
     }
 }
