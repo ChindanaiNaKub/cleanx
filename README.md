@@ -12,13 +12,13 @@ The Clean tab lists known caches, temp folders, trash, `.DS_Store` files and `no
 
 ## Run it
 
-Rune is pre-release. It needs a pinned clone and patched dependencies. The toolchain file asks for nightly Rust.
+One command gets the pinned Rune tree, builds, and installs `cleanx` into `~/.local/bin`. Add that folder to your `PATH`. The build needs nightly Rust.
 
 ```bash
-git clone --depth 1 --branch dev https://github.com/anomalyco/rune.git ../rune-src
-git -C ../rune-src checkout b39e1b4d326e323e971b86b8f105d3df53d4642c
-cargo run --
+git clone https://github.com/ChindanaiNaKub/cleanx.git && cd cleanx && bash scripts/install.sh
 ```
+
+From a checkout next to `../rune-src`, `cargo run --` starts the app without installing.
 
 Scenes render headlessly with `cargo run -- --snap out.png --scene clean`. Scenes are `clean`, `confirm`, `burst`, `burst-control`, `undo`, `empty`, `low` and `isolated`. Run `cargo test` for unit tests. Run `scripts/verify.sh` to check formatting, tests and every scene.
 
