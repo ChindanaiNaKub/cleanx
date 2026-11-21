@@ -4,6 +4,17 @@
 
 A small [Rune](https://github.com/anomalyco/rune) app that shows free disk space and lists files you can safely remove.
 
+## Overview
+
+These are real snapshots from the app's headless renderer.
+
+| | |
+| --- | --- |
+| **Free space dashboard**<br>The lava orb warms as the disk fills. Pills switch disks. Scan grows a sunburst.<br>![Space tab](assets/space.png) | **Safe-to-clean list**<br>Caches, temp files and junk with sizes and safety notes.<br>![Clean tab](assets/clean.png) |
+| **Two-press safety**<br>The first press arms the action. The second removes the checked rows.<br>![Confirm removal](assets/confirm.png) | **Undo**<br>Path items move to quarantine and restore until you close cleanX.<br>![Undo a clean](assets/undo.png) |
+
+Regenerate them with `cargo run -- --snap assets/space.png` and, for the others, add `--scene clean`, `--scene confirm` or `--scene undo`.
+
 ## What it does
 
 The Space tab draws a lava orb that shows free space and warms as the disk fills. Press Scan now to grow a sunburst. Pills switch between disks.
