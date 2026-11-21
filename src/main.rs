@@ -7,10 +7,23 @@ mod gfx;
 mod scan;
 mod session;
 
-use rune::tok::{self, TextStyle, motion, radius, space, type_};
+use rune::tok::{self, motion, radius, space};
 use rune::{
     AppSpec, Color, Cx, El, LineCap, ScrollSpec, Shape, canvas, col, effect, el, oklch, row, text,
 };
+
+/// One type scale for the app; Rune's tokens are 11.5–13 px, too small here.
+mod type_ {
+    use rune::tok::TextStyle;
+    pub const BODY: TextStyle = TextStyle::new(14.0, 400.0);
+    pub const LABEL: TextStyle = TextStyle::new(14.0, 500.0);
+    pub const SECTION: TextStyle = TextStyle::new(13.0, 600.0);
+    pub const TITLE: TextStyle = TextStyle::new(16.0, 650.0);
+    pub const HEADING: TextStyle = TextStyle::new(28.0, 650.0);
+    pub const VALUE: TextStyle = TextStyle::new(22.0, 650.0);
+    pub const HERO: TextStyle = TextStyle::new(50.0, 650.0);
+    pub const MONO_CAPTION: TextStyle = TextStyle::new(13.0, 500.0).mono();
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tab {
@@ -140,6 +153,11 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .h_full()
         .fill(t.bg)
         .child(
+            fx(gfx::MESH, [0.0, 0.0, 0.0, 0.0])
+                .key("ambient-lava")
+                .opacity(0.12),
+        )
+        .child(
             row()
                 .key("shell")
                 .grow(1.0)
@@ -163,9 +181,21 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                         .pb(space::S6)
                         .gap(space::S6)
                         .child(match s.tab {
-                            Tab::Space => {
-                                space_view(s, t.card, t.text, t.text_secondary, t.separator, hair)
-                            }
+                            Tab::Space => col()
+                                .key("space-stage")
+                                .center_y()
+                                .grow(1.0)
+                                .min_w(0.0)
+                                .min_h(0.0)
+                                .child(fx(gfx::MESH, [0.0, 0.0, 0.0, 0.0]).opacity(0.14))
+                                .child(space_view(
+                                    s,
+                                    t.card,
+                                    t.text,
+                                    t.text_secondary,
+                                    t.separator,
+                                    hair,
+                                )),
                             Tab::Clean => {
                                 clean_view(s, t.card, t.text, t.text_secondary, t.separator, hair)
                             }
@@ -222,7 +252,7 @@ fn sidebar(
     }
     col()
         .key("sidebar")
-        .w(200.0)
+        .w(216.0)
         .h_full()
         .px(space::S6)
         .pt(space::S6)
@@ -231,12 +261,7 @@ fn sidebar(
         .child(
             col()
                 .gap(2.0)
-                .child(
-                    text("cleanX")
-                        .key("brand")
-                        .font(TextStyle::new(20.0, 700.0))
-                        .color(ink),
-                )
+                .child(text("cleanX").key("brand").font(type_::TITLE).color(ink))
                 .child(
                     text("space, made visible")
                         .font(type_::LABEL)
@@ -245,12 +270,32 @@ fn sidebar(
         )
         .child(tabs)
         .child(
-            col().grow(1.0).child(el()).child(
-                text("caches · temp · junk")
+            col()
+                .key("scan-summary")
+                .grow(1.0)
+                .gap(2.0)
+                .mt(space::S6)
+                .child(
+                    text("LAST SCAN")
+                        .font(type_::SECTION)
+                        .color(secondary.alpha(0.7)),
+                )
+                .child(
+                    text(format!("{} items", s.session.candidates().len()))
+                        .font(type_::VALUE)
+                        .color(ink),
+                )
+                .child(
+                    text(
+                        s.session
+                            .current_volume()
+                            .map(|v| v.mount.as_str())
+                            .unwrap_or("no disk"),
+                    )
                     .font(type_::LABEL)
-                    .color(secondary.alpha(0.6))
-                    .mt(space::S3),
-            ),
+                    .color(secondary)
+                    .truncate(),
+                ),
         )
         .child(
             el().key("accent-line")
@@ -282,6 +327,15 @@ fn space_view(
     let (mood_text, mood_color) = mood(free);
     let hue = 150.0 - (1.0 - free) * 125.0;
     let orb_accent = oklch(0.72, 0.17, hue);
+
+    let mut by_kind: Vec<(scan::Kind, u64)> = Vec::new();
+    for c in s.session.candidates() {
+        match by_kind.iter_mut().find(|(k, _)| *k == c.target.kind) {
+            Some(entry) => entry.1 += c.target.bytes,
+            None => by_kind.push((c.target.kind, c.target.bytes)),
+        }
+    }
+    by_kind.sort_by(|a, b| b.1.cmp(&a.1));
 
     let mut pills = row().key("volumes").gap(6.0).w_full();
     if s.session.volumes().len() > 4 {
@@ -320,8 +374,13 @@ fn space_view(
     col()
         .key("space")
         .grow(1.0)
+        .w_full()
+        .max_w(1480.0)
         .min_h(0.0)
-        .gap(space::S3)
+        .gap(space::S2)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
         .child(
             row()
                 .key("space-head")
@@ -333,7 +392,7 @@ fn space_view(
                         .child(
                             text("Free space")
                                 .key("title")
-                                .font(TextStyle::new(24.0, 650.0))
+                                .font(type_::HEADING)
                                 .color(ink),
                         )
                         .child(text(&v.mount).font(type_::LABEL).color(secondary)),
@@ -385,10 +444,10 @@ fn space_view(
                                 .radius(106.0),
                         )
                         .child(
-                            fx(gfx::GLOW, [38.0, 0.95, 1.0 - free, 0.0])
+                            fx(gfx::GLOW, [64.0, 0.9, 1.0 - free, 0.0])
                                 .key("orb-glow")
                                 .radius(106.0)
-                                .effect_bleed(80.0),
+                                .effect_bleed(160.0),
                         )
                         .child(
                             col()
@@ -397,7 +456,7 @@ fn space_view(
                                 .child(
                                     text(format!("{:.0}%", free * 100.0))
                                         .key("free-pct")
-                                        .font(TextStyle::new(50.0, 650.0))
+                                        .font(type_::HERO)
                                         .color(Color::WHITE),
                                 )
                                 .child(
@@ -410,22 +469,25 @@ fn space_view(
                 .child(
                     col()
                         .grow(1.0)
+                        .min_w(0.0)
                         .gap(space::S3)
                         .child(
                             canvas(sunburst(s.session.scan_progress(), hue))
                                 .key("sunburst")
-                                .size(74.0, 74.0),
+                                .size(120.0, 120.0),
                         )
+                        .child(text("scan coverage").font(type_::SECTION).color(secondary))
                         .child(
                             text(mood_text)
                                 .key("mood")
-                                .font(TextStyle::new(19.0, 600.0))
+                                .font(type_::VALUE)
                                 .color(mood_color),
                         )
                         .child(
                             text("How much of this disk you can still grow into.")
                                 .font(type_::BODY)
-                                .color(secondary),
+                                .color(secondary)
+                                .truncate(),
                         ),
                 ),
         )
@@ -524,7 +586,7 @@ fn space_view(
                     col()
                         .gap(1.0)
                         .child(
-                            text("READY TO RECLAIM")
+                            text("SELECTED TO RECLAIM")
                                 .font(type_::SECTION)
                                 .color(secondary),
                         )
@@ -547,7 +609,7 @@ fn space_view(
                 .child(
                     el().grow(1.0).child(
                         text(scan::human(s.session.reclaimable()))
-                            .font(TextStyle::new(20.0, 650.0))
+                            .font(type_::VALUE)
                             .color(oklch(0.82, 0.14, 155.0))
                             .align(rune::Align::End),
                     ),
@@ -567,6 +629,91 @@ fn space_view(
                         ),
                 ),
         )
+        .child(
+            col()
+                .key("by-kind")
+                .h(72.0)
+                .px(space::S3)
+                .py(space::S2)
+                .gap(space::S2)
+                .radius(radius::LG)
+                .fill(card)
+                .border(hair, separator)
+                .child(
+                    text("RECLAIMABLE BY TYPE")
+                        .font(type_::SECTION)
+                        .color(secondary),
+                )
+                .child({
+                    let mut chips = row().key("kind-chips").gap(space::S2).grow(1.0);
+                    for (kind, bytes) in &by_kind {
+                        chips = chips.child(
+                            col()
+                                .grow(1.0)
+                                .min_w(0.0)
+                                .gap(2.0)
+                                .child(text(kind.label()).font(type_::SECTION).color(secondary))
+                                .child(
+                                    text(scan::human(*bytes))
+                                        .font(type_::TITLE)
+                                        .color(orb_accent),
+                                ),
+                        );
+                    }
+                    chips
+                }),
+        )
+        .child(
+            col()
+                .key("disks")
+                .min_h(200.0)
+                .max_h(360.0)
+                .grow(1.0)
+                .px(space::S3)
+                .py(space::S2)
+                .gap(space::S2)
+                .radius(radius::LG)
+                .fill(card)
+                .border(hair, separator)
+                .child(text("DISKS").font(type_::SECTION).color(secondary))
+                .child({
+                    let mut rows = col().key("disk-rows").grow(1.0).gap(space::S2);
+                    for (i, vol) in s.session.volumes().iter().enumerate() {
+                        let on = i == s.session.volume_index();
+                        let frac = scan::fraction(vol.free, vol.total);
+                        rows =
+                            rows.child(
+                                row()
+                                    .key(format!("disk-{i}"))
+                                    .grow(1.0)
+                                    .gap(space::S3)
+                                    .center_y()
+                                    .child(
+                                        text(&vol.name)
+                                            .font(type_::LABEL)
+                                            .color(if on { ink } else { secondary })
+                                            .truncate(),
+                                    )
+                                    .child(el().grow(1.0))
+                                    .child(
+                                        el().w(140.0)
+                                            .h(4.0)
+                                            .radius(2.0)
+                                            .fill(tok::theme(true).control_off)
+                                            .child(el().h(4.0).w_frac(frac).radius(2.0).fill(
+                                                if on { orb_accent } else { secondary.alpha(0.6) },
+                                            )),
+                                    )
+                                    .child(
+                                        text(format!("{:.0}% free", frac * 100.0))
+                                            .font(type_::LABEL)
+                                            .color(if on { orb_accent } else { secondary }),
+                                    ),
+                            );
+                    }
+                    rows
+                }),
+        )
 }
 
 fn stat(label: &str, value: &str, accent: Color, card: Color, secondary: Color, hair: f32) -> El {
@@ -575,12 +722,12 @@ fn stat(label: &str, value: &str, accent: Color, card: Color, secondary: Color, 
         .grow(1.0)
         .min_w(0.0)
         .gap(4.0)
-        .padding(space::S3)
+        .padding(space::S2)
         .radius(radius::LG)
         .fill(card)
         .border(hair, secondary.alpha(0.1))
         .child(text(label).font(type_::SECTION).color(secondary))
-        .child(text(value).font(TextStyle::new(19.0, 650.0)).color(accent))
+        .child(text(value).font(type_::VALUE).color(accent))
         .child(el().h(2.0).w(24.0).radius(1.0).fill(accent.alpha(0.7)))
 }
 
@@ -654,7 +801,7 @@ fn clean_view(
         list = list.child(
             row()
                 .key(format!("row-{i}"))
-                .h(58.0)
+                .h(66.0)
                 .px(space::S3)
                 .gap(space::S3)
                 .center_y()
@@ -809,7 +956,7 @@ fn clean_view(
                 .child(
                     text("Safe to clean")
                         .key("title")
-                        .font(TextStyle::new(24.0, 650.0))
+                        .font(type_::HEADING)
                         .color(ink),
                 )
                 .child(
@@ -894,7 +1041,7 @@ fn clean_view(
         .child(
             col()
                 .key("list-viewport")
-                .h(300.0)
+                .grow(1.0)
                 .min_h(0.0)
                 .scroll(ScrollSpec {
                     stick_bottom: false,
@@ -1108,6 +1255,17 @@ mod tests {
         let mut rt = Runtime::new(state, view, (760.0, 600.0), Env::new(true, 1.0));
         rt.frame(0.0);
         assert!(rt.find("held-clean").is_some());
+    }
+
+    #[test]
+    fn space_shows_a_reclaim_breakdown() {
+        let mut state = State::default();
+        state.session.set_candidates(vec![fake_target()]);
+        let mut rt = Runtime::new(state, view, (760.0, 600.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(rt.find("by-kind").is_some());
+        assert!(rt.find("kind-chips").is_some());
+        assert!(rt.find("disks").is_some());
     }
 
     #[test]
