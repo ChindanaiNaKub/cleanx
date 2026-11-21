@@ -12,6 +12,8 @@ pub const GLOW: u32 = 2;
 pub const FIRE: u32 = 3;
 pub const MESH: u32 = 4;
 pub const SPARK: u32 = 5;
+/// A selected checkbox: a small lava pool under the tick.
+pub const CHECK: u32 = 8;
 /// Row slots start here; the offset gives each row its own mark.
 pub const ROW: u32 = 16;
 
@@ -40,6 +42,9 @@ fn layer(mark: u32, d: [f32; 4], shape: Shape, t: f32) -> Option<FxLayer> {
             ..MetaballParams::lava()
         }),
         GLOW => {
+            if d[1] <= 0.0 {
+                return None;
+            }
             let color = if d[2] > 0.66 {
                 rgb(0xff5a3c)
             } else if d[2] > 0.33 {
@@ -77,6 +82,19 @@ fn layer(mark: u32, d: [f32; 4], shape: Shape, t: f32) -> Option<FxLayer> {
             margin: 24.0,
             burst: Some(d[0]),
         }),
+        CHECK => {
+            if d[0] < 0.5 {
+                return None;
+            }
+            Fx::fill(MetaballParams {
+                colors: Stops::hex(&[0xff5e3a, 0xffa23c, 0xff3d6e]),
+                base: rgb(0x3a1008),
+                count: 3,
+                size: 0.34,
+                speed: 0.5,
+                gloss: 0.6,
+            })
+        }
         _ if kind >= ROW => {
             if d[0] < 0.5 {
                 return None;

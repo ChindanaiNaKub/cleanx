@@ -8,7 +8,9 @@ mod scan;
 mod session;
 
 use rune::tok::{self, TextStyle, motion, radius, space, type_};
-use rune::{AppSpec, Color, Cx, El, ScrollSpec, Shape, canvas, col, effect, el, oklch, row, text};
+use rune::{
+    AppSpec, Color, Cx, El, LineCap, ScrollSpec, Shape, canvas, col, effect, el, oklch, row, text,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tab {
@@ -106,6 +108,26 @@ fn sunburst(progress: f32, hue: f32) -> Shape {
         );
     }
     shape
+}
+
+/// A vector tick. Centred on the view box so it stays balanced at any size.
+fn checkmark(size: f32, color: Color) -> Shape {
+    Shape::new()
+        .view_box(size, size)
+        .line(
+            [size * 0.27, size * 0.53],
+            [size * 0.43, size * 0.69],
+            size * 0.12,
+            LineCap::Round,
+            color,
+        )
+        .line(
+            [size * 0.43, size * 0.69],
+            [size * 0.75, size * 0.31],
+            size * 0.12,
+            LineCap::Round,
+            color,
+        )
 }
 
 fn view(s: &State, _: &mut Cx<State>) -> El {
@@ -625,6 +647,7 @@ fn clean_view(
                 .fill(card)
                 .hover(secondary.alpha(0.06))
                 .press(secondary.alpha(0.1))
+                .press_scale(0.985)
                 .focusable(true)
                 .on_press(move |s: &mut State| s.session.toggle(i))
                 .child(
@@ -637,26 +660,42 @@ fn clean_view(
                 )
                 .child(
                     el().key("check")
-                        .size(18.0, 18.0)
-                        .radius(5.0)
+                        .size(20.0, 20.0)
+                        .radius(radius::SM)
+                        .center()
                         .fill(if on {
-                            tok::accent(0, true)
+                            oklch(0.45, 0.15, 40.0)
                         } else {
-                            Color::TRANSPARENT
+                            oklch(0.17, 0.02, 35.0)
                         })
                         .border(
                             hair,
                             if on {
-                                tok::accent(0, true)
+                                oklch(0.88, 0.12, 60.0)
                             } else {
-                                secondary.alpha(0.5)
+                                oklch(0.55, 0.07, 45.0).alpha(0.55)
                             },
                         )
                         .child(
-                            text(if on { "✓" } else { "" })
-                                .font(type_::LABEL)
-                                .color(Color::WHITE)
-                                .center(),
+                            fx(gfx::CHECK, [if on { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0])
+                                .key(format!("check-lava-{i}"))
+                                .radius(radius::SM),
+                        )
+                        .child(
+                            fx(gfx::GLOW, [5.0, if on { 0.45 } else { 0.0 }, 0.5, 0.0])
+                                .key(format!("check-glow-{i}"))
+                                .radius(radius::SM)
+                                .effect_bleed(8.0),
+                        )
+                        .child(
+                            canvas(checkmark(
+                                20.0,
+                                Color::WHITE.alpha(if on { 1.0 } else { 0.0 }),
+                            ))
+                            .key(format!("check-mark-{i}"))
+                            .size(20.0, 20.0)
+                            .scale(if on { 1.0 } else { 0.6 })
+                            .scale_motion(motion::POP),
                         ),
                 )
                 .child(
@@ -965,6 +1004,17 @@ mod tests {
         let mut rt = Runtime::new(state, view, (760.0, 600.0), Env::new(true, 1.0));
         rt.frame(0.0);
         assert!(rt.find("confetti").is_some());
+    }
+
+    #[test]
+    fn a_chosen_row_uses_the_lava_checkbox() {
+        let mut state = State::default();
+        state.tab = Tab::Clean;
+        state.session.set_candidates(vec![fake_target()]);
+        let mut rt = Runtime::new(state, view, (760.0, 600.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(rt.find("check-lava-0").is_some());
+        assert!(rt.find("check-mark-0").is_some());
     }
 
     #[test]
