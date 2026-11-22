@@ -10,7 +10,7 @@ mod session;
 use rune::tok::{self, motion, radius, space};
 use rune::{
     AppSpec, Color, Cx, Drag, El, LineCap, Phase, ScrollSpec, Shape, Transition, Tx, canvas, col,
-    effect, el, oklch, row, text,
+    effect, el, oklch, oklcha, row, text,
 };
 
 /// One type scale for the app; Rune's tokens are 11.5–13 px, too small here.
@@ -147,6 +147,26 @@ fn sunburst(progress: f32, hue: f32, phase: f32) -> Shape {
         shape = shape.fill(
             points,
             oklch(lightness, 0.16, hue + i as f32 * 6.0).alpha(0.78),
+        );
+    }
+    shape
+}
+
+/// A thin track with a round-capped fill. CUI-style, sized by the largest kind.
+fn kind_bar(fraction: f32, color: Color) -> Shape {
+    const W: f32 = 100.0;
+    let track = oklcha(1.0, 0.0, 0.0, 0.12);
+    let mut shape =
+        Shape::new()
+            .view_box(W, 8.0)
+            .line([0.0, 4.0], [W, 4.0], 6.0, LineCap::Round, track);
+    if fraction > 0.0 {
+        shape = shape.line(
+            [0.0, 4.0],
+            [(fraction * W).max(6.0), 4.0],
+            6.0,
+            LineCap::Round,
+            color,
         );
     }
     shape
@@ -761,7 +781,6 @@ fn space_view(
         .child(
             col()
                 .key("by-kind")
-                .h(72.0)
                 .px(space::S3)
                 .py(space::S2)
                 .gap(space::S2)
@@ -774,22 +793,35 @@ fn space_view(
                         .color(secondary),
                 )
                 .child({
-                    let mut chips = row().key("kind-chips").gap(space::S2).grow(1.0);
+                    let mut rows = col().key("kind-chips").gap(space::S2);
+                    let max = by_kind.first().map_or(1, |(_, b)| *b).max(1);
                     for (kind, bytes) in &by_kind {
-                        chips = chips.child(
-                            col()
-                                .grow(1.0)
-                                .min_w(0.0)
-                                .gap(2.0)
-                                .child(text(kind.label()).font(type_::SECTION).color(secondary))
+                        rows = rows.child(
+                            row()
+                                .gap(space::S2)
+                                .center_y()
+                                .child(el().size(7.0, 7.0).radius(2.0).fill(kind_color(*kind)))
+                                .child(
+                                    text(kind.label())
+                                        .font(type_::LABEL)
+                                        .color(secondary)
+                                        .w(60.0),
+                                )
+                                .child(
+                                    canvas(kind_bar(*bytes as f32 / max as f32, kind_color(*kind)))
+                                        .grow(1.0)
+                                        .h(8.0),
+                                )
                                 .child(
                                     text(scan::human(*bytes))
-                                        .font(type_::TITLE)
-                                        .color(orb_accent),
+                                        .font(type_::LABEL)
+                                        .color(ink)
+                                        .w(64.0)
+                                        .align(rune::Align::End),
                                 ),
                         );
                     }
-                    chips
+                    rows
                 }),
         )
         .child(
