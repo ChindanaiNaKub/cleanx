@@ -35,6 +35,8 @@ struct State {
     session: session::Session,
     tab: Tab,
     notice: Option<String>,
+    /// Clean-tab category filter. None shows every category.
+    category: Option<scan::Kind>,
     /// The `isolated` scene sets this to render effects inside an isolated layer.
     isolate: bool,
 }
@@ -45,6 +47,7 @@ impl Default for State {
             session: session::Session::new(),
             tab: Tab::Space,
             notice: None,
+            category: None,
             isolate: false,
         }
     }
@@ -78,6 +81,31 @@ fn mood(free: f32) -> (&'static str, Color) {
     } else {
         ("Almost full", oklch(0.78, 0.18, 30.0))
     }
+}
+
+/// One hue per kind. The sidebar and the rows read the same color, so the color
+/// means one thing everywhere. Kept separate from Impact, which means safety.
+fn kind_color(kind: scan::Kind) -> Color {
+    match kind {
+        scan::Kind::Cache => oklch(0.82, 0.14, 70.0),
+        scan::Kind::Temp => oklch(0.82, 0.12, 205.0),
+        scan::Kind::Trash => oklch(0.78, 0.15, 25.0),
+        scan::Kind::Meta => oklch(0.79, 0.12, 320.0),
+        scan::Kind::Build => oklch(0.81, 0.13, 155.0),
+    }
+}
+
+/// Sizes per kind, largest first. One source for the sidebar and the Space tab.
+fn kind_totals(candidates: &[session::Candidate]) -> Vec<(scan::Kind, u64)> {
+    let mut out: Vec<(scan::Kind, u64)> = Vec::new();
+    for c in candidates {
+        match out.iter_mut().find(|(k, _)| *k == c.target.kind) {
+            Some(entry) => entry.1 += c.target.bytes,
+            None => out.push((c.target.kind, c.target.bytes)),
+        }
+    }
+    out.sort_by(|a, b| b.1.cmp(&a.1));
+    out
 }
 
 /// An effect slot: `mark` picks the shader, `data` carries its live numbers.
@@ -250,6 +278,26 @@ fn sidebar(
                 ),
         );
     }
+    // One colored row per kind, sized from the same scan the Space tab reads.
+    let totals = kind_totals(s.session.candidates());
+    let total: u64 = totals.iter().map(|(_, bytes)| *bytes).sum();
+    let mut cats = col().key("categories").gap(2.0);
+    cats = cats.child(category_row(
+        None, "All", total, indicator, s.category, card, ink, secondary,
+    ));
+    for (kind, bytes) in totals {
+        cats = cats.child(category_row(
+            Some(kind),
+            kind.label(),
+            bytes,
+            kind_color(kind),
+            s.category,
+            card,
+            ink,
+            secondary,
+        ));
+    }
+
     col()
         .key("sidebar")
         .w(216.0)
@@ -271,10 +319,21 @@ fn sidebar(
         .child(tabs)
         .child(
             col()
+                .gap(2.0)
+                .mt(space::S3)
+                .child(
+                    text("CATEGORIES")
+                        .font(type_::SECTION)
+                        .color(secondary.alpha(0.7)),
+                )
+                .child(cats),
+        )
+        .child(
+            col()
                 .key("scan-summary")
                 .grow(1.0)
                 .gap(2.0)
-                .mt(space::S6)
+                .mt(space::S3)
                 .child(
                     text("LAST SCAN")
                         .font(type_::SECTION)
@@ -307,6 +366,51 @@ fn sidebar(
         )
 }
 
+/// A sidebar category. The same colored square appears on its rows in Clean.
+fn category_row(
+    kind: Option<scan::Kind>,
+    label: &'static str,
+    bytes: u64,
+    swatch: Color,
+    active: Option<scan::Kind>,
+    card: Color,
+    ink: Color,
+    secondary: Color,
+) -> El {
+    let on = active == kind;
+    row()
+        .key(format!("cat-{}", label.to_ascii_lowercase()))
+        .role("radio")
+        .label(label)
+        .checked(on)
+        .focusable(true)
+        .h(28.0)
+        .px(space::S2)
+        .gap(space::S2)
+        .radius(radius::SM)
+        .fill(if on { card } else { Color::TRANSPARENT })
+        .hover(secondary.alpha(0.08))
+        .on_press(move |s: &mut State| {
+            s.category = kind;
+            s.tab = Tab::Clean;
+        })
+        .center_y()
+        .child(el().size(8.0, 8.0).radius(2.0).fill(swatch))
+        .child(
+            text(label)
+                .font(type_::MONO_CAPTION)
+                .color(if on { ink } else { secondary })
+                .a11y_hidden(),
+        )
+        .child(el().grow(1.0))
+        .child(
+            text(scan::human(bytes))
+                .font(type_::MONO_CAPTION)
+                .color(if on { ink } else { secondary.alpha(0.8) })
+                .a11y_hidden(),
+        )
+}
+
 fn space_view(
     s: &State,
     card: Color,
@@ -328,14 +432,7 @@ fn space_view(
     let hue = 150.0 - (1.0 - free) * 125.0;
     let orb_accent = oklch(0.72, 0.17, hue);
 
-    let mut by_kind: Vec<(scan::Kind, u64)> = Vec::new();
-    for c in s.session.candidates() {
-        match by_kind.iter_mut().find(|(k, _)| *k == c.target.kind) {
-            Some(entry) => entry.1 += c.target.bytes,
-            None => by_kind.push((c.target.kind, c.target.bytes)),
-        }
-    }
-    by_kind.sort_by(|a, b| b.1.cmp(&a.1));
+    let by_kind = kind_totals(s.session.candidates());
 
     let mut pills = row().key("volumes").gap(6.0).w_full();
     if s.session.volumes().len() > 4 {
@@ -761,16 +858,24 @@ fn clean_view(
         el().key("clean-fire-off").h(0.0)
     };
 
-    let max_bytes = s
+    // The sidebar picks a category. Row keys stay tied to the real candidate index.
+    let shown: Vec<(usize, &session::Candidate)> = s
         .session
         .candidates()
         .iter()
-        .map(|c| c.target.bytes)
+        .enumerate()
+        .filter(|(_, c)| s.category.is_none_or(|k| c.target.kind == k))
+        .collect();
+    let total_bytes: u64 = s.session.candidates().iter().map(|c| c.target.bytes).sum();
+    let max_bytes = shown
+        .iter()
+        .map(|(_, c)| c.target.bytes)
         .max()
         .unwrap_or(1)
         .max(1);
+    let home = scan::home_dir();
     let mut list = col().key("clean-list").gap(6.0);
-    if s.session.candidates().is_empty() {
+    if shown.is_empty() {
         list = list.child(
             col()
                 .center()
@@ -784,8 +889,14 @@ fn clean_view(
                 ),
         );
     }
-    for (i, c) in s.session.candidates().iter().enumerate() {
+    for &(i, c) in &shown {
         let target = &c.target;
+        let swatch = kind_color(target.kind);
+        let path = match target.path.strip_prefix(&home) {
+            Ok(p) => format!("~/{}", p.to_string_lossy()),
+            Err(_) => target.path.to_string_lossy().into_owned(),
+        };
+        let pct = scan::fraction(target.bytes, total_bytes) * 100.0;
         let on = c.chosen;
         let badge = if on {
             oklch(0.78, 0.14, 155.0)
@@ -865,11 +976,23 @@ fn clean_view(
                         .grow(1.0)
                         .min_w(0.0)
                         .gap(2.0)
-                        .child(text(&target.label).font(type_::TITLE).color(ink))
+                        .child(
+                            row()
+                                .gap(space::S2)
+                                .center_y()
+                                .child(el().size(6.0, 6.0).radius(3.0).fill(swatch))
+                                .child(text(&target.label).font(type_::TITLE).color(ink)),
+                        )
                         .child(
                             text(&target.detail)
                                 .font(type_::LABEL)
                                 .color(secondary)
+                                .truncate(),
+                        )
+                        .child(
+                            text(&path)
+                                .font(type_::MONO_CAPTION)
+                                .color(secondary.alpha(0.65))
                                 .truncate(),
                         )
                         .child(
@@ -886,6 +1009,11 @@ fn clean_view(
                             text(scan::human(target.bytes))
                                 .font(type_::MONO_CAPTION)
                                 .color(ink),
+                        )
+                        .child(
+                            text(format!("{pct:.0}%"))
+                                .font(type_::MONO_CAPTION)
+                                .color(swatch),
                         )
                         .child(
                             text(if target.impact.view_only() {
@@ -945,6 +1073,32 @@ fn clean_view(
         );
     }
 
+    let filter_bar = match s.category {
+        Some(k) => row()
+            .key("filter-bar")
+            .h(30.0)
+            .gap(space::S2)
+            .center_y()
+            .child(el().size(8.0, 8.0).radius(2.0).fill(kind_color(k)))
+            .child(
+                text(format!("{} · {} items", k.label(), shown.len()))
+                    .font(type_::MONO_CAPTION)
+                    .color(secondary),
+            )
+            .child(el().grow(1.0))
+            .child(
+                el().key("filter-clear")
+                    .h(24.0)
+                    .px(space::S2)
+                    .radius(radius::SM)
+                    .fill(card)
+                    .center()
+                    .on_press(|s: &mut State| s.category = None)
+                    .child(text("Show all").font(type_::SECTION).color(ink)),
+            ),
+        None => el().key("filter-off").h(0.0),
+    };
+
     col()
         .key("clean")
         .grow(1.0)
@@ -970,6 +1124,7 @@ fn clean_view(
                         .color(secondary.alpha(0.8)),
                 ),
         )
+        .child(filter_bar)
         .child(
             row()
                 .key("summary")
@@ -1056,7 +1211,10 @@ fn clean_press(s: &mut State) {
     if !s.session.armed() {
         if !s.session.arm() {
             s.notice = Some("Select something first.".into());
+            return;
         }
+        // Arming reveals every category, so the confirm press shows its full scope.
+        s.category = None;
         return;
     }
     let report = s.session.clean();
@@ -1124,6 +1282,19 @@ mod tests {
             kind: scan::Kind::Cache,
             impact: scan::Impact::Safe,
             bytes: 4096,
+            tool: None,
+            default_on: true,
+        }
+    }
+
+    fn fake_temp_target() -> scan::CleanTarget {
+        scan::CleanTarget {
+            path: std::path::PathBuf::from("/home/test/tmp"),
+            label: "App temp".into(),
+            detail: "temporary files".into(),
+            kind: scan::Kind::Temp,
+            impact: scan::Impact::Safe,
+            bytes: 2048,
             tool: None,
             default_on: true,
         }
@@ -1245,6 +1416,56 @@ mod tests {
         rt.frame(0.0);
         assert!(!rt.state.session.candidates()[0].chosen);
         assert!(!rt.state.session.armed());
+    }
+
+    #[test]
+    fn a_sidebar_category_filters_the_clean_list() {
+        let mut state = State::default();
+        state
+            .session
+            .set_candidates(vec![fake_target(), fake_temp_target()]);
+        let mut rt = Runtime::new(state, view, (760.0, 600.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let (x, y) = rt.find("cat-cache").unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        assert_eq!(rt.state.tab, Tab::Clean);
+        assert_eq!(rt.state.category, Some(scan::Kind::Cache));
+        assert!(rt.find("row-0").is_some());
+        assert!(rt.find("row-1").is_none());
+        assert!(rt.find("filter-bar").is_some());
+        // The new filter bar fades in; let it finish before pressing its button.
+        for _ in 0..8 {
+            if !rt.frame(1.0) {
+                break;
+            }
+        }
+        let (x, y) = rt.find("filter-clear").unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        assert_eq!(rt.state.category, None);
+        assert!(rt.find("row-1").is_some());
+    }
+
+    #[test]
+    fn arming_a_filtered_list_reveals_every_category() {
+        let mut state = State::default();
+        state.tab = Tab::Clean;
+        state.category = Some(scan::Kind::Cache);
+        state
+            .session
+            .set_candidates(vec![fake_target(), fake_temp_target()]);
+        let mut rt = Runtime::new(state, view, (760.0, 600.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        let (x, y) = rt.find("clean-button").unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        assert!(rt.state.session.armed());
+        assert_eq!(rt.state.category, None);
+        assert!(rt.find("row-1").is_some());
     }
 
     #[test]
