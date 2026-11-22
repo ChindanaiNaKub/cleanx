@@ -12,6 +12,10 @@ pub const GLOW: u32 = 2;
 pub const FIRE: u32 = 3;
 pub const MESH: u32 = 4;
 pub const SPARK: u32 = 5;
+/// A slow crimson tide that fills the window: the red-ocean backdrop.
+pub const OCEAN: u32 = 6;
+/// Drifting lava pools layered over the tide.
+pub const EMBER: u32 = 7;
 /// A selected checkbox: a small lava pool under the tick.
 pub const CHECK: u32 = 8;
 /// Row slots start here; the offset gives each row its own mark.
@@ -81,6 +85,22 @@ fn layer(mark: u32, d: [f32; 4], shape: Shape, t: f32) -> Option<FxLayer> {
             intensity: 1.0,
             margin: 24.0,
             burst: Some(d[0]),
+        }),
+        OCEAN => Fx::fill(WaveParams {
+            colors: Stops::hex(&[0xff8a4c, 0xe8422f, 0x240812]),
+            amplitude: 0.08,
+            frequency: 1.4,
+            speed: 0.22,
+            angle: 0.0,
+            softness: 0.03,
+        }),
+        EMBER => Fx::fill(MetaballParams {
+            colors: Stops::hex(&[0xff6a3c, 0xff3d6e, 0xffa23c]),
+            base: rgb(0x2a0810),
+            count: 3,
+            size: 0.16,
+            speed: 0.16,
+            gloss: 0.45,
         }),
         CHECK => {
             if d[0] < 0.5 {

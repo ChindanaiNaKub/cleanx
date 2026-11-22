@@ -181,11 +181,6 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .h_full()
         .fill(t.bg)
         .child(
-            fx(gfx::MESH, [0.0, 0.0, 0.0, 0.0])
-                .key("ambient-lava")
-                .opacity(0.12),
-        )
-        .child(
             row()
                 .key("shell")
                 .grow(1.0)
@@ -208,6 +203,16 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                         .pt(space::S6)
                         .pb(space::S6)
                         .gap(space::S6)
+                        .child(
+                            fx(gfx::OCEAN, [0.0, 0.0, 0.0, 0.0])
+                                .key("ambient-ocean")
+                                .opacity(0.4),
+                        )
+                        .child(
+                            fx(gfx::EMBER, [0.0, 0.0, 0.0, 0.0])
+                                .key("ambient-ember")
+                                .opacity(0.22),
+                        )
                         .child(match s.tab {
                             Tab::Space => col()
                                 .key("space-stage")
@@ -215,7 +220,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                                 .grow(1.0)
                                 .min_w(0.0)
                                 .min_h(0.0)
-                                .child(fx(gfx::MESH, [0.0, 0.0, 0.0, 0.0]).opacity(0.14))
+                                .child(fx(gfx::MESH, [0.0, 0.0, 0.0, 0.0]).opacity(0.06))
                                 .child(space_view(
                                     s,
                                     t.card,
@@ -1387,6 +1392,8 @@ mod tests {
     fn effects_decorate_the_orb_and_arm_the_clean_bar() {
         let mut rt = Runtime::new(State::default(), view, (760.0, 600.0), Env::new(true, 1.0));
         rt.frame(0.0);
+        assert!(rt.find("ambient-ocean").is_some());
+        assert!(rt.find("ambient-ember").is_some());
         assert!(rt.find("orb-lava").is_some());
         assert!(rt.find("orb-glow").is_some());
         assert!(rt.find("sunburst").is_some());
