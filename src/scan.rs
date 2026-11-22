@@ -39,11 +39,11 @@ impl Kind {
 }
 
 /// One value decides the visible tag and the action cleanX may take.
+/// Each tag maps to exactly one action, so the label never lies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Impact {
     Safe,
     Caution,
-    ViewOnly,
     HandsOff,
 }
 
@@ -51,17 +51,13 @@ impl Impact {
     pub fn tag(self) -> &'static str {
         match self {
             Impact::Safe => "SAFE",
-            Impact::Caution | Impact::ViewOnly => "CAUTION",
+            Impact::Caution => "CAUTION",
             Impact::HandsOff => "HANDS OFF",
         }
     }
 
     pub fn cleanable(self) -> bool {
         matches!(self, Impact::Safe | Impact::Caution)
-    }
-
-    pub fn view_only(self) -> bool {
-        matches!(self, Impact::ViewOnly | Impact::HandsOff)
     }
 }
 
@@ -163,13 +159,15 @@ pub fn volumes() -> Vec<Volume> {
 }
 
 /// Paths that are throwaway by construction. Missing ones are ignored.
+/// Fields: relative path, kind, label, detail, impact, default selection.
 /// The last field is the default selection in the Clean tab.
-const RULES: &[(&str, Kind, &str, &str, bool)] = &[
+const RULES: &[(&str, Kind, &str, &str, Impact, bool)] = &[
     (
         ".cache/thumbnails",
         Kind::Cache,
         "Thumbnails",
         "Regenerates when you browse",
+        Impact::Safe,
         true,
     ),
     (
@@ -177,6 +175,7 @@ const RULES: &[(&str, Kind, &str, &str, bool)] = &[
         Kind::Cache,
         "App cache",
         "Downloads and app data can be fetched again",
+        Impact::Safe,
         false,
     ),
     (
@@ -184,6 +183,7 @@ const RULES: &[(&str, Kind, &str, &str, bool)] = &[
         Kind::Cache,
         "App cache",
         "macOS application caches",
+        Impact::Safe,
         false,
     ),
     (
@@ -191,6 +191,7 @@ const RULES: &[(&str, Kind, &str, &str, bool)] = &[
         Kind::Temp,
         "App temp",
         "Temporary files from installed apps",
+        Impact::Safe,
         true,
     ),
     (
@@ -198,6 +199,7 @@ const RULES: &[(&str, Kind, &str, &str, bool)] = &[
         Kind::Cache,
         "npm cache",
         "Restored by npm on the next install",
+        Impact::Safe,
         false,
     ),
     (
@@ -205,6 +207,7 @@ const RULES: &[(&str, Kind, &str, &str, bool)] = &[
         Kind::Cache,
         "Cargo cache",
         "Crate archives, re-downloadable",
+        Impact::Safe,
         false,
     ),
     (
@@ -212,6 +215,7 @@ const RULES: &[(&str, Kind, &str, &str, bool)] = &[
         Kind::Cache,
         "Gradle cache",
         "Rebuilt on the next Gradle run",
+        Impact::Safe,
         false,
     ),
     (
@@ -219,6 +223,7 @@ const RULES: &[(&str, Kind, &str, &str, bool)] = &[
         Kind::Trash,
         "Trash",
         "Files already deleted by you",
+        Impact::Safe,
         false,
     ),
     (
@@ -226,6 +231,7 @@ const RULES: &[(&str, Kind, &str, &str, bool)] = &[
         Kind::Trash,
         "Trash",
         "Files already deleted by you",
+        Impact::Safe,
         false,
     ),
     (
@@ -233,7 +239,48 @@ const RULES: &[(&str, Kind, &str, &str, bool)] = &[
         Kind::Temp,
         "App logs",
         "Old diagnostic logs",
+        Impact::Safe,
         true,
+    ),
+    (
+        ".npm/_npx",
+        Kind::Cache,
+        "npm npx cache",
+        "Rebuilt by npx on demand",
+        Impact::Safe,
+        false,
+    ),
+    (
+        ".bun/install/cache",
+        Kind::Cache,
+        "Bun cache",
+        "Rebuilt by bun on the next install",
+        Impact::Safe,
+        false,
+    ),
+    (
+        ".local/share/pnpm/store",
+        Kind::Cache,
+        "pnpm store",
+        "Re-linked on the next install",
+        Impact::Caution,
+        false,
+    ),
+    (
+        "anaconda3/pkgs",
+        Kind::Cache,
+        "Conda packages",
+        "Rebuilt from Conda channels",
+        Impact::Safe,
+        false,
+    ),
+    (
+        ".rustup/toolchains",
+        Kind::Build,
+        "Rust toolchains",
+        "Reinstall with rustup",
+        Impact::Caution,
+        false,
     ),
 ];
 
@@ -282,7 +329,13 @@ fn dir_size(path: &Path) -> u64 {
 /// Floor for reporting a large file. Raise it when the list gets noisy.
 const LARGE_FILE_BYTES: u64 = 100 * 1024 * 1024;
 
-fn view_target(root: &Path, path: PathBuf, name: &str, bytes: u64, hands_off: bool) -> CleanTarget {
+/// Top-level home folders that hold user data or tool state. Report, never clean.
+const PROTECTED_NAMES: &[&str] = &[
+    ".codex", ".config", ".docker", ".gemini", ".mozilla", ".nvm", ".rustup", ".ssh", ".var",
+];
+
+/// A reported item is Caution and cleanable unless its name is protected.
+fn report_target(root: &Path, path: PathBuf, name: &str, bytes: u64) -> CleanTarget {
     let detail = path
         .strip_prefix(root)
         .unwrap_or(&path)
@@ -293,10 +346,10 @@ fn view_target(root: &Path, path: PathBuf, name: &str, bytes: u64, hands_off: bo
         label: name.to_string(),
         detail,
         kind: Kind::Meta,
-        impact: if hands_off {
+        impact: if PROTECTED_NAMES.contains(&name) {
             Impact::HandsOff
         } else {
-            Impact::ViewOnly
+            Impact::Caution
         },
         bytes,
         tool: None,
@@ -315,6 +368,10 @@ fn discover(root: &Path, known: &HashSet<PathBuf>, out: &mut Vec<CleanTarget>) {
         }
         left -= 1;
         if p.starts_with(&private) {
+            continue;
+        }
+        // A folder holding an allow-listed path is already covered by that rule.
+        if p != root && known.iter().any(|k| k.starts_with(&p) && k != &p) {
             continue;
         }
         let Ok(md) = fs::symlink_metadata(&p) else {
@@ -353,9 +410,8 @@ fn discover(root: &Path, known: &HashSet<PathBuf>, out: &mut Vec<CleanTarget>) {
         if !known.contains(&p)
             && (name.starts_with('.') || (md.is_file() && md.len() >= LARGE_FILE_BYTES))
         {
-            let hands_off = name == ".config" || name == ".ssh" || name.starts_with(".local");
             let bytes = if md.is_dir() { dir_size(&p) } else { md.len() };
-            out.push(view_target(root, p.clone(), name, bytes, hands_off));
+            out.push(report_target(root, p.clone(), name, bytes));
         }
         if md.is_dir()
             && depth < 6
@@ -514,7 +570,7 @@ pub fn log_change_with(entry: &str, home: &Path) {
 pub fn clean_targets() -> Vec<CleanTarget> {
     let home = home_dir();
     let mut out = Vec::new();
-    for (rel, kind, label, detail, default_on) in RULES {
+    for (rel, kind, label, detail, impact, default_on) in RULES {
         let path = home.join(rel);
         let Ok(md) = fs::symlink_metadata(&path) else {
             continue;
@@ -537,7 +593,7 @@ pub fn clean_targets() -> Vec<CleanTarget> {
             label: (*label).into(),
             detail: (*detail).into(),
             kind: *kind,
-            impact: Impact::Safe,
+            impact: *impact,
             tool: None,
             default_on: *default_on,
         });
@@ -545,7 +601,7 @@ pub fn clean_targets() -> Vec<CleanTarget> {
     if !home.as_os_str().is_empty() {
         let known: HashSet<PathBuf> = RULES
             .iter()
-            .map(|(rel, _, _, _, _)| home.join(rel))
+            .map(|(rel, _, _, _, _, _)| home.join(rel))
             .collect();
         discover(&home, &known, &mut out);
     }
@@ -672,10 +728,49 @@ pub fn restore_path(original: &Path, stash: &Path, home: &Path) -> io::Result<()
     fs::rename(stash, original)
 }
 
-/// Clears the quarantine left by a previous session. Called once at app startup.
-pub fn purge_quarantine() {
-    let root = home_dir().join(".local/share/cleanx/quarantine");
+/// Clears the quarantine and its manifest. Called when the user clears held items.
+pub fn purge_quarantine_with(home: &Path) {
+    let root = home.join(".local/share/cleanx/quarantine");
     let _ = fs::remove_dir_all(root);
+}
+
+fn manifest_path(home: &Path) -> PathBuf {
+    home.join(".local/share/cleanx/quarantine/manifest.tsv")
+}
+
+/// Saves the restore data for items currently held in quarantine.
+pub fn write_manifest(entries: &[(PathBuf, String, u64)], home: &Path) -> io::Result<()> {
+    let path = manifest_path(home);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut text = String::new();
+    for (original, label, bytes) in entries {
+        let rel = original.strip_prefix(home).map_err(|_| refused())?;
+        text.push_str(&rel.to_string_lossy());
+        text.push('\t');
+        text.push_str(label);
+        text.push('\t');
+        text.push_str(&bytes.to_string());
+        text.push('\n');
+    }
+    fs::write(path, text)
+}
+
+/// Reads the restore data left by this or an earlier session.
+pub fn read_manifest(home: &Path) -> Vec<(PathBuf, String, u64)> {
+    let Ok(text) = fs::read_to_string(manifest_path(home)) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let mut fields = line.splitn(3, '\t');
+            let rel = fields.next()?;
+            let label = fields.next()?.to_string();
+            let bytes = fields.next()?.parse().ok()?;
+            Some((home.join(rel), label, bytes))
+        })
+        .collect()
 }
 
 fn parse_history_line(line: &str) -> Option<(u64, String)> {
@@ -815,7 +910,7 @@ mod tests {
     }
 
     #[test]
-    fn discovery_marks_hidden_and_large_items_view_only() {
+    fn discovery_reports_hidden_and_large_items_as_caution() {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -841,9 +936,9 @@ mod tests {
         assert!(quarantine_target(config, &home).is_err());
 
         let large = out.iter().find(|t| t.label == "big.bin").unwrap();
-        assert_eq!(large.impact, Impact::ViewOnly);
+        assert_eq!(large.impact, Impact::Caution);
         assert_eq!(large.impact.tag(), "CAUTION");
-        assert!(!large.impact.cleanable());
+        assert!(large.impact.cleanable());
         assert!(large.bytes >= LARGE_FILE_BYTES);
         fs::remove_dir_all(base).unwrap();
     }

@@ -6,9 +6,9 @@ cleanX has one domain context. It makes disk use visible and moves removable ite
 
 - Disk volumes and free space, read with `df`.
 - Candidates, the allow-listed items cleanX may act on.
-- Read-only discovery of hidden and large items across home. These items carry an Impact tag; only allow-listed Candidates may be cleaned.
+- Discovery of hidden and large items across home. These items carry an Impact tag. SAFE and CAUTION items may be cleaned; HANDS OFF items are reported only.
 - Safe clean, the two-press action that stashes path items and runs owning tools.
-- Session quarantine, undo, and the local change log.
+- Quarantine and undo across restarts, clearing held items, and the local change log.
 - The freed-space counter and the scan visual.
 
 ## Outside the boundary
@@ -17,7 +17,7 @@ cleanX has one domain context. It makes disk use visible and moves removable ite
 - Malware removal, registry repair, and driver updates.
 - Accounts, network calls, cloud storage, and telemetry.
 - Editing system files. cleanX never deletes outside the home allow-list.
-- Undo across restarts. Undo ends when the session ends.
+- Clearing held items automatically. The user clears them explicitly.
 
 ## Language
 

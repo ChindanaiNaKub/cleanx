@@ -66,7 +66,7 @@ fn init() -> State {
             || a == "--list-scenes"
     });
     if !tooling {
-        s.session.purge_previous_session();
+        s.session.load_quarantine();
     }
     s
 }
@@ -283,7 +283,7 @@ fn sidebar(
     let total: u64 = totals.iter().map(|(_, bytes)| *bytes).sum();
     let mut cats = col().key("categories").gap(2.0);
     cats = cats.child(category_row(
-        None, "All", total, indicator, s.category, card, ink, secondary,
+        None, "Found", total, indicator, s.category, card, ink, secondary,
     ));
     for (kind, bytes) in totals {
         cats = cats.child(category_row(
@@ -322,7 +322,7 @@ fn sidebar(
                 .gap(2.0)
                 .mt(space::S3)
                 .child(
-                    text("CATEGORIES")
+                    text("CLEANABLE FOUND")
                         .font(type_::SECTION)
                         .color(secondary.alpha(0.7)),
                 )
@@ -354,6 +354,17 @@ fn sidebar(
                     .font(type_::LABEL)
                     .color(secondary)
                     .truncate(),
+                )
+                .child(
+                    text(format!(
+                        "used on disk {}",
+                        s.session
+                            .current_volume()
+                            .map(|v| scan::human(v.used))
+                            .unwrap_or_default()
+                    ))
+                    .font(type_::LABEL)
+                    .color(secondary),
                 ),
         )
         .child(
@@ -472,7 +483,6 @@ fn space_view(
         .key("space")
         .grow(1.0)
         .w_full()
-        .max_w(1480.0)
         .min_h(0.0)
         .gap(space::S2)
         .scroll(ScrollSpec {
@@ -683,7 +693,7 @@ fn space_view(
                     col()
                         .gap(1.0)
                         .child(
-                            text("SELECTED TO RECLAIM")
+                            text("SELECTED FOR CLEAN")
                                 .font(type_::SECTION)
                                 .color(secondary),
                         )
@@ -737,7 +747,7 @@ fn space_view(
                 .fill(card)
                 .border(hair, separator)
                 .child(
-                    text("RECLAIMABLE BY TYPE")
+                    text("CLEANABLE BY TYPE")
                         .font(type_::SECTION)
                         .color(secondary),
                 )
@@ -905,14 +915,14 @@ fn clean_view(
         };
         let tag_color = match target.impact {
             scan::Impact::Safe => oklch(0.78, 0.14, 155.0),
-            scan::Impact::Caution | scan::Impact::ViewOnly => oklch(0.82, 0.13, 70.0),
+            scan::Impact::Caution => oklch(0.82, 0.13, 70.0),
             scan::Impact::HandsOff => oklch(0.72, 0.16, 30.0),
         };
         let bar_w = (90.0 * scan::fraction(target.bytes, max_bytes)).max(2.0);
         list = list.child(
             row()
                 .key(format!("row-{i}"))
-                .h(66.0)
+                .min_h(84.0)
                 .px(space::S3)
                 .gap(space::S3)
                 .center_y()
@@ -1016,8 +1026,8 @@ fn clean_view(
                                 .color(swatch),
                         )
                         .child(
-                            text(if target.impact.view_only() {
-                                "VIEW ONLY"
+                            text(if target.impact == scan::Impact::HandsOff {
+                                "HANDS OFF"
                             } else if c.undoable {
                                 target.kind.label()
                             } else {
@@ -1056,6 +1066,19 @@ fn clean_view(
                     .font(type_::LABEL)
                     .color(oklch(0.85, 0.14, 155.0)),
             )
+    };
+
+    let clear_held = if s.session.quarantine().is_empty() {
+        el().key("clear-held-off").h(0.0)
+    } else {
+        el().key("clear-held")
+            .h(36.0)
+            .px(space::S3)
+            .radius(radius::MD)
+            .fill(secondary.alpha(0.1))
+            .center()
+            .on_press(clear_held_press)
+            .child(text("Clear held").font(type_::LABEL).color(secondary))
     };
 
     let mut activity = col().key("history").gap(2.0);
@@ -1108,13 +1131,13 @@ fn clean_view(
             col()
                 .gap(2.0)
                 .child(
-                    text("Safe to clean")
+                    text("Clean")
                         .key("title")
                         .font(type_::HEADING)
                         .color(ink),
                 )
                 .child(
-                    text("Clean allow-listed items. Other large or hidden items are view only. Held bytes return on restart.")
+                    text("Clean caches and large or hidden files. Protected folders are never offered. Held items stay until you clear them.")
                         .font(type_::BODY)
                         .color(secondary),
                 )
@@ -1175,6 +1198,7 @@ fn clean_view(
                         ),
                 )
                 .child(undo)
+                .child(clear_held)
                 .child(
                     el().key("clean-button")
                         .h(36.0)
@@ -1223,7 +1247,7 @@ fn clean_press(s: &mut State) {
         report.path_items, report.tool_items, report.failed
     );
     if !s.session.quarantine().is_empty() {
-        msg.push_str(" Undo lasts until you close cleanX.");
+        msg.push_str(" Undo lasts until you clear held items.");
     }
     if let Some(cmd) = report.retry {
         msg.push_str(&format!(" If asked, run: {cmd}."));
@@ -1238,6 +1262,14 @@ fn undo_press(s: &mut State) {
         msg.push_str(&format!(" Reason: {why}."));
     }
     s.notice = Some(msg);
+}
+
+fn clear_held_press(s: &mut State) {
+    let bytes = s.session.clear_held();
+    s.notice = Some(format!(
+        "Freed {} held items. This cannot be undone.",
+        scan::human(bytes)
+    ));
 }
 
 fn main() {

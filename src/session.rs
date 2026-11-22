@@ -67,7 +67,7 @@ pub struct Session {
     candidates: Vec<Candidate>,
     clean_phase: CleanPhase,
     quarantine: Vec<Quarantined>,
-    tool_freed: u64,
+    freed_total: u64,
     history: Vec<(u64, String)>,
     scan: ScanPhase,
     scan_progress: f32,
@@ -82,7 +82,7 @@ impl Session {
             candidates: Vec::new(),
             clean_phase: CleanPhase::Idle,
             quarantine: Vec::new(),
-            tool_freed: 0,
+            freed_total: 0,
             history: scan::read_history(),
             scan: ScanPhase::Idle,
             scan_progress: 1.0,
@@ -92,11 +92,34 @@ impl Session {
         s
     }
 
-    /// Called once by the app, not by tests or snapshot scenes. Undo dies on restart.
-    pub fn purge_previous_session(&mut self) {
-        scan::purge_quarantine();
-        self.quarantine.clear();
-        self.tool_freed = 0;
+    /// Called once by the app, not by tests or snapshot scenes. Held items survive restarts.
+    pub fn load_quarantine(&mut self) {
+        self.load_quarantine_with_home(&scan::home_dir());
+    }
+
+    pub fn load_quarantine_with_home(&mut self, home: &std::path::Path) {
+        self.quarantine = scan::read_manifest(home)
+            .into_iter()
+            .filter_map(|(path, label, bytes)| {
+                let stash = scan::quarantine_path(&path, home).ok()?;
+                if !stash.exists() {
+                    return None;
+                }
+                Some(Quarantined {
+                    target: scan::CleanTarget {
+                        path,
+                        label,
+                        detail: "Held from an earlier session".into(),
+                        kind: scan::Kind::Meta,
+                        impact: scan::Impact::Caution,
+                        bytes,
+                        tool: None,
+                        default_on: false,
+                    },
+                    stash,
+                })
+            })
+            .collect();
     }
 
     fn reload_candidates(&mut self) {
@@ -161,9 +184,9 @@ impl Session {
         self.quarantine.iter().map(|q| q.target.bytes).sum::<u64>()
     }
 
-    /// Returned to the volume by owning tools during this session.
+    /// Returned to the volume by owning tools and by clearing held items.
     pub fn freed_bytes(&self) -> u64 {
-        self.tool_freed
+        self.freed_total
     }
 
     pub fn scan_progress(&self) -> f32 {
@@ -260,7 +283,7 @@ impl Session {
                     } else {
                         let left = scan::current_size(&target);
                         let freed = target.bytes.saturating_sub(left);
-                        self.tool_freed = self.tool_freed.saturating_add(freed);
+                        self.freed_total = self.freed_total.saturating_add(freed);
                         report.tool_items += 1;
                         freed
                     };
@@ -281,6 +304,18 @@ impl Session {
             }
         }
         self.candidates.retain(|c| !done.contains(&c.target.path));
+        let held: Vec<_> = self
+            .quarantine
+            .iter()
+            .map(|q| {
+                (
+                    q.target.path.clone(),
+                    q.target.label.clone(),
+                    q.target.bytes,
+                )
+            })
+            .collect();
+        let _ = scan::write_manifest(&held, home);
         self.history = scan::read_history_with(home);
         if report.path_items + report.tool_items > 0 {
             self.burst = Burst::Requested;
@@ -313,6 +348,18 @@ impl Session {
             }
         }
         self.quarantine = keep;
+        let held: Vec<_> = self
+            .quarantine
+            .iter()
+            .map(|q| {
+                (
+                    q.target.path.clone(),
+                    q.target.label.clone(),
+                    q.target.bytes,
+                )
+            })
+            .collect();
+        let _ = scan::write_manifest(&held, home);
         for target in restored {
             self.candidates.push(Candidate {
                 target,
@@ -322,6 +369,24 @@ impl Session {
         }
         self.history = scan::read_history_with(home);
         report
+    }
+
+    /// Removes held items for good and returns the bytes given back to the volume.
+    pub fn clear_held(&mut self) -> u64 {
+        self.clear_held_with_home(&scan::home_dir())
+    }
+
+    pub fn clear_held_with_home(&mut self, home: &std::path::Path) -> u64 {
+        self.clean_phase = CleanPhase::Idle;
+        let bytes = self.held_bytes();
+        scan::purge_quarantine_with(home);
+        self.quarantine.clear();
+        if bytes > 0 {
+            self.freed_total = self.freed_total.saturating_add(bytes);
+            scan::log_change_with(&format!("Cleared held {}", scan::human(bytes)), home);
+        }
+        self.history = scan::read_history_with(home);
+        bytes
     }
 
     /// Advances the scan and confetti clocks. Returns true only on a visible change.
@@ -565,6 +630,37 @@ mod tests {
         let report = s.clean_with_home(&home);
         assert_eq!(report.path_items, 0);
         assert!(dir.exists());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn held_items_survive_a_new_session() {
+        let (base, home) = temp_home();
+        let dir = home.join(".cache").join("keep");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.txt"), b"x").unwrap();
+        let mut s = Session::new();
+        s.set_candidates(vec![scan::CleanTarget {
+            path: dir.clone(),
+            label: "Keep".into(),
+            detail: "test".into(),
+            kind: scan::Kind::Cache,
+            impact: scan::Impact::Safe,
+            bytes: 1,
+            tool: None,
+            default_on: true,
+        }]);
+        s.arm();
+        s.clean_with_home(&home);
+
+        let mut reopened = Session::new();
+        reopened.load_quarantine_with_home(&home);
+        assert_eq!(reopened.quarantine().len(), 1);
+        assert_eq!(reopened.held_bytes(), 1);
+        let undo = reopened.undo_with_home(&home);
+        assert_eq!(undo.restored, 1);
+        assert!(dir.exists());
+        assert_eq!(reopened.held_bytes(), 0);
         fs::remove_dir_all(base).unwrap();
     }
 }
