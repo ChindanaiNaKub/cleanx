@@ -1,0 +1,54 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            binary: cleanx
+            asset: cleanx-linux-x86_64
+          - os: windows-latest
+            binary: cleanx.exe
+            asset: cleanx-windows-x86_64.exe
+          - os: macos-15-intel
+            binary: cleanx
+            asset: cleanx-macos-x86_64
+          - os: macos-latest
+            binary: cleanx
+            asset: cleanx-macos-aarch64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libvulkan1 mesa-vulkan-drivers
+
+      - name: Fetch pinned Rune tree
+        shell: bash
+        run: bash scripts/rune.sh
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Build release binary
+        shell: bash
+        run: cargo build --release
+
+      - name: Name asset
+        shell: bash
+        run: cp "target/release/${{ matrix.binary }}" "${{ matrix.asset }}"
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset }}
