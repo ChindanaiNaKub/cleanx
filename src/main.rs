@@ -518,6 +518,7 @@ fn space_view(
                         .radius(radius::MD)
                         .fill(card)
                         .border(hair, separator)
+                        .press_scale(0.985)
                         .center()
                         .on_press(|s: &mut State| {
                             s.session.scan_now();
@@ -747,6 +748,7 @@ fn space_view(
                         .px(space::S3)
                         .radius(radius::MD)
                         .fill(tok::accent(4, true).alpha(0.22))
+                        .press_scale(0.985)
                         .center()
                         .on_press(|s: &mut State| s.tab = Tab::Clean)
                         .child(
@@ -1079,6 +1081,7 @@ fn clean_view(
             .px(space::S3)
             .radius(radius::MD)
             .fill(tok::accent(4, true).alpha(0.22))
+            .press_scale(0.985)
             .center()
             .on_press(undo_press)
             .child(
@@ -1096,6 +1099,7 @@ fn clean_view(
             .px(space::S3)
             .radius(radius::MD)
             .fill(secondary.alpha(0.1))
+            .press_scale(0.985)
             .center()
             .on_press(clear_held_press)
             .child(text("Clear held").font(type_::LABEL).color(secondary))
@@ -1135,6 +1139,7 @@ fn clean_view(
                     .px(space::S2)
                     .radius(radius::SM)
                     .fill(card)
+                    .press_scale(0.985)
                     .center()
                     .on_press(|s: &mut State| s.category = None)
                     .child(text("Show all").font(type_::SECTION).color(ink)),
@@ -1225,6 +1230,7 @@ fn clean_view(
                         .px(space::S6)
                         .radius(radius::MD)
                         .fill(btn_color)
+                        .press_scale(0.985)
                         .center()
                         .on_press(clean_press)
                         .child(text(label).font(type_::TITLE).color(Color::WHITE)),
