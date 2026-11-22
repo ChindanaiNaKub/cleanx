@@ -70,3 +70,7 @@ Scenes render headlessly with `cargo run -- --snap out.png --scene clean`. Scene
 - Category totals cover home only. They are not the whole volume's used space from `df`.
 - The app needs a GPU with a supported Vulkan driver on Linux. Headless snapshots use the same renderer.
 - No build command or test removes a file. Only a confirmed clean moves path items to quarantine.
+
+## Contributing
+
+Want to help? Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, checks and the safety rules.
