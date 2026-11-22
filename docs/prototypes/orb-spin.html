@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>cleanX orb spin prototype</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #120d0f;
+    --card: #1f1619;
+    --line: #3a2a2e;
+    --text: #f3e8e6;
+    --muted: #a48e91;
+    --lava: #ff6b3d;
+    --ember: #e2693f;
+    --amber: #e8a33d;
+    --dim: #6b5a5f;
+    --free: #3a2b2e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 0;
+    display: grid;
+    place-items: center;
+    background: radial-gradient(120% 90% at 50% 110%, #3a1614 0%, var(--bg) 62%);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: var(--text);
+  }
+  .card {
+    width: 760px;
+    max-width: calc(100vw - 32px);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    box-shadow: 0 30px 80px #0009;
+    overflow: hidden;
+  }
+  header, footer { padding: 16px 22px; }
+  header { border-bottom: 1px solid var(--line); }
+  header h1 { margin: 0; font-size: 17px; letter-spacing: .2px; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  .body { display: grid; grid-template-columns: 340px 1fr; align-items: center; gap: 6px; padding: 10px 18px; }
+  .wheel-wrap { position: relative; width: 320px; height: 320px; margin: 0 auto; touch-action: none; }
+  svg { width: 100%; height: 100%; display: block; cursor: grab; }
+  svg.dragging { cursor: grabbing; }
+  .readout {
+    position: absolute; inset: 0; display: grid; place-content: center; text-align: center;
+    pointer-events: none;
+  }
+  .readout b { font-size: 40px; font-variant-numeric: tabular-nums; letter-spacing: -1px; }
+  .readout span { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1.4px; }
+  .rows { display: grid; gap: 7px; }
+  .row {
+    display: grid; grid-template-columns: 12px 1fr auto; align-items: center; gap: 10px;
+    padding: 9px 12px; border: 1px solid var(--line); border-radius: 9px;
+    background: #ffffff05; cursor: pointer;
+  }
+  .row:focus-visible { outline: 2px solid var(--lava); outline-offset: 2px; }
+  .row.on { background: #ff6b3d12; border-color: #ff6b3d55; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .row .name { font-size: 13px; }
+  .row .tag { font-size: 9px; letter-spacing: 1px; color: var(--muted); margin-left: 6px; }
+  .row .size { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+  footer { border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+  button {
+    font: inherit; font-size: 12px; color: var(--text); background: #ffffff0d;
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; cursor: pointer;
+  }
+  button:hover { background: #ffffff17; }
+  button:focus-visible { outline: 2px solid var(--lava); outline-offset: 2px; }
+  button.primary { background: var(--lava); border-color: var(--lava); color: #1a0d08; font-weight: 700; }
+  .status { margin-left: auto; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  @media (prefers-reduced-motion: reduce) { svg { cursor: default; } }
+</style>
+</head>
+<body>
+<div class="card">
+  <header>
+    <h1>cleanX</h1>
+    <p>Orb spin prototype. Drag the ring to spin it. Scan grows the arcs.</p>
+  </header>
+  <div class="body">
+    <div class="wheel-wrap" id="wheelWrap">
+      <svg id="wheel" viewBox="0 0 320 320" role="img" aria-label="Disk use ring. Drag to spin.">
+        <circle cx="160" cy="160" r="140" fill="none" stroke="#ffffff08" stroke-width="22"/>
+        <g id="ring"></g>
+        <circle id="core" cx="160" cy="160" r="74" fill="#ff6b3d10" stroke="#ff6b3d33"/>
+        <circle cx="160" cy="160" r="60" fill="none" stroke="#ffffff08" stroke-width="2"/>
+      </svg>
+      <div class="readout"><b id="pct">64%</b><span id="state">used</span></div>
+    </div>
+    <div class="rows" id="rows"></div>
+  </div>
+  <footer>
+    <button id="scan">Scan</button>
+    <button id="clean" class="primary">Clean selected</button>
+    <button id="undo">Undo</button>
+    <div class="status" id="status" role="status" aria-live="polite">Freed 0.0 GB</div>
+  </footer>
+</div>
+<script>
+(() => {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const GB = 512;
+  const cats = [
+    { name: 'System data', pct: .22, shown: .22, impact: 'hands', color: '#6b5a5f', chosen: false },
+    { name: 'Apps',        pct: .28, shown: .28, impact: 'safe',   color: '#ff6b3d', chosen: false },
+    { name: 'Caches',      pct: .14, shown: .14, impact: 'safe',   color: '#e2693f', chosen: true  },
+    { name: 'Developer',   pct: .18, shown: .18, impact: 'caution',color: '#e8a33d', chosen: false },
+    { name: 'Free',        pct: .18, shown: .18, impact: 'free',   color: '#3a2b2e', chosen: false },
+  ];
+
+  const ring = document.getElementById('ring');
+  const rows = document.getElementById('rows');
+  const wheel = document.getElementById('wheel');
+  const pct = document.getElementById('pct');
+  const state = document.getElementById('state');
+  const status = document.getElementById('status');
+  const core = document.getElementById('core');
+  const NS = 'http://www.w3.org/2000/svg';
+
+  function arc(cx, cy, r1, r2, a0, a1) {
+    const pt = (r, a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)];
+    const [x0, y0] = pt(r1, a0), [x1, y1] = pt(r1, a1);
+    const [x2, y2] = pt(r2, a1), [x3, y3] = pt(r2, a0);
+    const large = a1 - a0 > Math.PI ? 1 : 0;
+    return `M${x0} ${y0} A${r1} ${r1} 0 ${large} 1 ${x1} ${y1} L${x2} ${y2} A${r2} ${r2} 0 ${large} 0 ${x3} ${y3} Z`;
+  }
+
+  function renderRing() {
+    ring.replaceChildren();
+    const gap = .018;
+    let a = -Math.PI / 2;
+    cats.forEach((c, i) => {
+      const sweep = c.shown * Math.PI * 2;
+      const path = document.createElementNS(NS, 'path');
+      path.setAttribute('d', arc(160, 160, 140, 116, a + gap, a + sweep - gap));
+      path.setAttribute('fill', c.color);
+      path.setAttribute('data-cat', i);
+      path.style.opacity = c.impact === 'hands' || c.impact === 'free' ? .5 : 1;
+      ring.appendChild(path);
+      a += sweep;
+    });
+  }
+
+  function renderRows() {
+    rows.replaceChildren();
+    cats.forEach((c, i) => {
+      if (c.impact === 'free') return;
+      const row = document.createElement('div');
+      row.className = 'row' + (c.chosen ? ' on' : '');
+      row.tabIndex = 0;
+      row.setAttribute('role', 'checkbox');
+      row.setAttribute('aria-checked', c.chosen ? 'true' : 'false');
+      row.setAttribute('aria-label', `${c.name}, ${(c.pct * GB).toFixed(1)} gigabytes, ${c.impact}`);
+      const dot = document.createElement('span');
+      dot.className = 'dot'; dot.style.background = c.color;
+      const name = document.createElement('span');
+      name.className = 'name'; name.textContent = c.name;
+      const tag = document.createElement('span');
+      tag.className = 'tag'; tag.textContent = c.impact.toUpperCase();
+      name.appendChild(tag);
+      const size = document.createElement('span');
+      size.className = 'size'; size.textContent = (c.shown * GB).toFixed(1) + ' GB';
+      row.append(dot, name, size);
+      const toggle = () => {
+        if (c.impact === 'hands') return;
+        c.chosen = !c.chosen;
+        renderRows();
+      };
+      row.addEventListener('click', toggle);
+      row.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+      });
+      rows.appendChild(row);
+    });
+  }
+
+  let angle = 0, velocity = reduce ? 0 : .0016, scanT = 1, scanFrom = 0;
+  function frame() {
+    if (!reduce) {
+      angle += velocity;
+      velocity += ((scanT < 1 ? .02 : .0016) - velocity) * .04;
+      velocity *= .995;
+    }
+    ring.setAttribute('transform', `rotate(${angle * 180 / Math.PI} 160 160)`);
+    core.setAttribute('r', String(74 + (scanT < 1 ? 6 * Math.sin(scanT * Math.PI) : 0)));
+    requestAnimationFrame(frame);
+  }
+
+  wheel.addEventListener('pointerdown', e => {
+    if (reduce) return;
+    wheel.setPointerCapture(e.pointerId);
+    wheel.classList.add('dragging');
+    const r = wheel.getBoundingClientRect();
+    drag.last = Math.atan2(e.clientY - r.top - r.height / 2, e.clientX - r.left - r.width / 2);
+    drag.on = true; velocity = 0;
+  });
+  const drag = { on: false, last: 0 };
+  wheel.addEventListener('pointermove', e => {
+    if (!drag.on) return;
+    const r = wheel.getBoundingClientRect();
+    const a = Math.atan2(e.clientY - r.top - r.height / 2, e.clientX - r.left - r.width / 2);
+    let d = a - drag.last;
+    if (d > Math.PI) d -= 2 * Math.PI;
+    if (d < -Math.PI) d += 2 * Math.PI;
+    angle += d; velocity = d * .8; drag.last = a;
+  });
+  const endDrag = () => { drag.on = false; wheel.classList.remove('dragging'); };
+  wheel.addEventListener('pointerup', endDrag);
+  wheel.addEventListener('pointercancel', endDrag);
+
+  document.getElementById('scan').addEventListener('click', () => {
+    state.textContent = 'scanning';
+    scanFrom = cats.map(c => c.shown);
+    cats.forEach(c => { c.shown = c.pct * .12; });
+    scanT = 0;
+    renderRing(); renderRows();
+    const start = performance.now();
+    const tick = now => {
+      scanT = Math.min(1, (now - start) / 1200);
+      const e = 1 - Math.pow(1 - scanT, 3);
+      cats.forEach((c, i) => { c.shown = scanFrom[i] + (c.pct - scanFrom[i]) * e; });
+      renderRing(); renderRows();
+      updateTotal();
+      if (scanT < 1) requestAnimationFrame(tick);
+      else state.textContent = 'used';
+    };
+    requestAnimationFrame(tick);
+  });
+
+  let freed = 0;
+  function updateTotal() {
+    const used = cats.filter(c => c.impact !== 'free').reduce((s, c) => s + c.shown, 0);
+    pct.textContent = Math.round(used * 100) + '%';
+    status.textContent = 'Freed ' + freed.toFixed(1) + ' GB';
+  }
+
+  document.getElementById('clean').addEventListener('click', () => {
+    const picked = cats.filter(c => c.chosen && c.impact !== 'hands');
+    if (!picked.length) { state.textContent = 'nothing selected'; return; }
+    state.textContent = 'cleaning';
+    picked.forEach(c => { freed += c.shown * GB; c.saved = c.shown; c.shown = 0; });
+    renderRing(); renderRows(); updateTotal();
+    state.textContent = 'cleaned';
+  });
+
+  document.getElementById('undo').addEventListener('click', () => {
+    cats.forEach(c => {
+      if (c.saved) { freed -= c.saved * GB; c.shown = c.saved; c.saved = 0; }
+    });
+    renderRing(); renderRows(); updateTotal();
+    state.textContent = 'restored';
+  });
+
+  renderRing(); renderRows(); updateTotal(); frame();
+})();
+</script>
+</body>
+</html>

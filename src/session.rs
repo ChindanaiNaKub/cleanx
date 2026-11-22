@@ -2,6 +2,7 @@
 //! Path guards stay in `scan.rs`. This module decides which items to act on.
 
 use std::collections::HashSet;
+use std::f64::consts::{PI, TAU};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -11,6 +12,9 @@ use crate::scan;
 
 const SCAN_SECS: f64 = 0.9;
 const BURST_SECS: f64 = 1.6;
+/// Radians per second. The ring settles at rest and spins on Scan or drag.
+const SPIN_IDLE: f64 = 0.0;
+const SPIN_SCAN: f64 = 2.2;
 
 #[derive(Clone, Debug)]
 pub struct Candidate {
@@ -72,6 +76,10 @@ pub struct Session {
     scan: ScanPhase,
     scan_progress: f32,
     burst: Burst,
+    spin_phase: f64,
+    spin_velocity: f64,
+    spin_drag: Option<f64>,
+    last_tick: Option<f64>,
 }
 
 impl Session {
@@ -87,6 +95,11 @@ impl Session {
             scan: ScanPhase::Idle,
             scan_progress: 1.0,
             burst: Burst::None,
+            spin_phase: 0.0,
+            spin_velocity: SPIN_IDLE,
+
+            spin_drag: None,
+            last_tick: None,
         };
         s.reload_candidates();
         s
@@ -200,6 +213,36 @@ impl Session {
         }
     }
 
+    /// Angular offset for the sunburst geometry, in radians.
+    pub fn spin_phase(&self) -> f32 {
+        self.spin_phase as f32
+    }
+
+    pub fn spin_drag_start(&mut self, angle: f32) {
+        self.spin_drag = Some(angle as f64);
+        self.spin_velocity = 0.0;
+    }
+
+    pub fn spin_drag_move(&mut self, angle: f32) {
+        let Some(previous) = self.spin_drag else {
+            return;
+        };
+        let angle = angle as f64;
+        let mut delta = angle - previous;
+        if delta > PI {
+            delta -= TAU;
+        } else if delta < -PI {
+            delta += TAU;
+        }
+        self.spin_phase += delta;
+        self.spin_velocity = delta * 18.0;
+        self.spin_drag = Some(angle);
+    }
+
+    pub fn spin_drag_end(&mut self) {
+        self.spin_drag = None;
+    }
+
     pub fn select_volume(&mut self, i: usize) {
         self.volume = i;
     }
@@ -231,6 +274,7 @@ impl Session {
         self.clean_phase = CleanPhase::Idle;
         self.scan = ScanPhase::Requested;
         self.scan_progress = 0.12;
+        self.spin_velocity = SPIN_SCAN;
     }
 
     /// First press arms. Second press stashes path items and runs owning tools.
@@ -392,6 +436,25 @@ impl Session {
     /// Advances the scan and confetti clocks. Returns true only on a visible change.
     pub fn tick(&mut self, t: f64, tx: &mut Tx) -> bool {
         let mut changed = false;
+        let dt = self
+            .last_tick
+            .map(|last| (t - last).clamp(0.0, 0.1))
+            .unwrap_or(1.0 / 60.0);
+        self.last_tick = Some(t);
+        if self.spin_drag.is_none() {
+            let target = if self.scan == ScanPhase::Idle {
+                SPIN_IDLE
+            } else {
+                SPIN_SCAN
+            };
+            let ease = (dt * 3.0).clamp(0.0, 1.0);
+            self.spin_velocity += (target - self.spin_velocity) * ease;
+            self.spin_phase = (self.spin_phase + self.spin_velocity * dt) % TAU;
+            if self.spin_velocity.abs() > 0.02 {
+                changed = true;
+                tx.wake_after(Duration::from_millis(16));
+            }
+        }
         match self.scan {
             ScanPhase::Requested => {
                 self.scan = ScanPhase::Running { start: t };
@@ -662,5 +725,40 @@ mod tests {
         assert!(dir.exists());
         assert_eq!(reopened.held_bytes(), 0);
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn scan_speeds_up_the_spin_clock() {
+        let mut s = Session::new();
+        let mut tx = Tx::default();
+        let start = s.spin_phase();
+        for i in 0..30 {
+            s.tick(i as f64 / 60.0, &mut tx);
+        }
+        let idle = (s.spin_phase() - start).abs();
+
+        s.scan_now();
+        let scan_start = s.spin_phase();
+        for i in 30..60 {
+            s.tick(i as f64 / 60.0, &mut tx);
+        }
+        let scan = (s.spin_phase() - scan_start).abs();
+        assert!(idle < 1e-6);
+        assert!(scan > 0.1);
+    }
+
+    #[test]
+    fn dragging_the_ring_moves_it_and_leaves_momentum() {
+        let mut s = Session::new();
+        let start = s.spin_phase();
+        s.spin_drag_start(0.0);
+        s.spin_drag_move(0.5);
+        s.spin_drag_end();
+        let dragged = s.spin_phase();
+        assert!((dragged - start - 0.5).abs() < 1e-6);
+
+        let mut tx = Tx::default();
+        s.tick(1.0 / 60.0, &mut tx);
+        assert!(s.spin_phase() > dragged);
     }
 }

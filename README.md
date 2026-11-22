@@ -10,14 +10,14 @@ These are real snapshots from the app's headless renderer.
 
 | | |
 | --- | --- |
-| **Free space dashboard**<br>The lava orb warms as the disk fills. Pills switch disks. Scan grows a sunburst.<br>![Space tab](assets/space.png) | **Safe-to-clean list**<br>Caches, temp files and junk with sizes and safety notes. Selected rows carry a lava tick.<br>![Clean tab](assets/clean.png) |
+| **Free space dashboard**<br>The lava orb warms as the disk fills. Pills switch disks. Drag the ring to spin it, and Scan spins it faster as the sunburst grows.<br>![Space tab](assets/space.png) | **Safe-to-clean list**<br>Caches, temp files and junk with sizes and safety notes. Selected rows carry a lava tick.<br>![Clean tab](assets/clean.png) |
 | **Two-press safety**<br>The first press arms the action. The second removes the checked rows.<br>![Confirm removal](assets/confirm.png) | **Undo**<br>Path items move to quarantine and restore until you clear them.<br>![Undo a clean](assets/undo.png) |
 
 Regenerate them with `cargo run -- --snap assets/space.png` and, for the others, add `--scene clean`, `--scene confirm` or `--scene undo`.
 
 ## What it does
 
-The Space tab draws a lava orb that shows free space and warms as the disk fills. Press Scan now to grow a sunburst. Pills switch between disks.
+The Space tab draws a lava orb that shows free space and warms as the disk fills. Drag the ring to spin it. Press Scan now to spin it faster as the sunburst grows. Pills switch between disks.
 
 The Clean tab lists known caches, temp folders, trash, `.DS_Store` files, `node_modules` folders, and large or hidden files it finds under home. On Fedora it also lists the dnf package cache, journal logs and unused Flatpak runtimes. Select rows, arm the action, then press again to clean. Path items move to quarantine and get an Undo button. Protected folders such as `.config` and `.ssh` are reported but never offered. System tools do not get undo.
 

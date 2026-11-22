@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug)]
 pub struct Volume {
@@ -158,6 +158,68 @@ pub fn volumes() -> Vec<Volume> {
     }
 }
 
+/// The desktops cleanX supports. Backends are picked by Cargo, so rules are
+/// picked at runtime and stay testable on any host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Platform {
+    Linux,
+    Macos,
+    Windows,
+}
+
+impl Platform {
+    pub fn current() -> Self {
+        match std::env::consts::OS {
+            "macos" => Self::Macos,
+            "windows" => Self::Windows,
+            _ => Self::Linux,
+        }
+    }
+
+    fn bit(self) -> u8 {
+        match self {
+            Self::Linux => 1,
+            Self::Macos => 2,
+            Self::Windows => 4,
+        }
+    }
+}
+
+const LINUX: u8 = 1;
+const MACOS: u8 = 2;
+const WINDOWS: u8 = 4;
+const ALL: u8 = LINUX | MACOS | WINDOWS;
+const THREE_DAYS: u64 = 3 * 24 * 60 * 60;
+
+/// Paths offered only on some desktops. Others apply everywhere.
+const RULE_PLATFORMS: &[(&str, u8)] = &[
+    ("Library/Caches", MACOS),
+    ("Library/Logs", MACOS),
+    ("Library/Developer/Xcode/DerivedData", MACOS),
+    (".Trash", MACOS),
+    ("AppData/Local/Temp", WINDOWS),
+    ("AppData/Local/CrashDumps", WINDOWS),
+];
+
+/// Minimum file age in a temp path. Fresh files there may still be in use.
+const RULE_MIN_AGE: &[(&str, u64)] = &[("AppData/Local/Temp", THREE_DAYS)];
+
+fn platforms_for(rel: &str) -> u8 {
+    RULE_PLATFORMS
+        .iter()
+        .find(|(p, _)| *p == rel)
+        .map(|(_, bits)| *bits)
+        .unwrap_or(ALL)
+}
+
+fn min_age_for(rel: &str) -> u64 {
+    RULE_MIN_AGE
+        .iter()
+        .find(|(p, _)| *p == rel)
+        .map(|(_, age)| *age)
+        .unwrap_or(0)
+}
+
 /// Paths that are throwaway by construction. Missing ones are ignored.
 /// Fields: relative path, kind, label, detail, impact, default selection.
 /// The last field is the default selection in the Clean tab.
@@ -282,6 +344,22 @@ const RULES: &[(&str, Kind, &str, &str, Impact, bool)] = &[
         Impact::Caution,
         false,
     ),
+    (
+        "AppData/Local/CrashDumps",
+        Kind::Temp,
+        "Crash dumps",
+        "Reports written when an app crashed",
+        Impact::Safe,
+        false,
+    ),
+    (
+        "Library/Developer/Xcode/DerivedData",
+        Kind::Build,
+        "Xcode build output",
+        "Rebuilt by Xcode on the next build",
+        Impact::Caution,
+        false,
+    ),
 ];
 
 pub fn home_dir() -> PathBuf {
@@ -291,7 +369,7 @@ pub fn home_dir() -> PathBuf {
         .unwrap_or_default()
 }
 
-fn dir_size_skip(path: &Path, skip: Option<&str>) -> u64 {
+fn dir_size_with(path: &Path, skip: Option<&str>, cutoff: Option<SystemTime>) -> u64 {
     let mut stack = vec![path.to_path_buf()];
     let mut left = 40_000_u64;
     let mut bytes = 0_u64;
@@ -315,6 +393,9 @@ fn dir_size_skip(path: &Path, skip: Option<&str>) -> u64 {
                 }
             }
         } else if md.is_file() {
+            if cutoff.is_some_and(|t| md.modified().is_ok_and(|m| m > t)) {
+                continue;
+            }
             left -= 1;
             bytes += md.len();
         }
@@ -323,7 +404,7 @@ fn dir_size_skip(path: &Path, skip: Option<&str>) -> u64 {
 }
 
 fn dir_size(path: &Path) -> u64 {
-    dir_size_skip(path, None)
+    dir_size_with(path, None, None)
 }
 
 /// Floor for reporting a large file. Raise it when the list gets noisy.
@@ -549,11 +630,6 @@ pub fn command_line(tool: &Tool) -> String {
     parts.join(" ")
 }
 
-/// Appends one line to the local change log. Never fails the clean if logging fails.
-pub fn log_change(entry: &str) {
-    log_change_with(entry, &home_dir());
-}
-
 /// Appends to the log under the given home. Tests use this to avoid real state.
 pub fn log_change_with(entry: &str, home: &Path) {
     let path = history_path_with(home);
@@ -567,10 +643,82 @@ pub fn log_change_with(entry: &str, home: &Path) {
     }
 }
 
-pub fn clean_targets() -> Vec<CleanTarget> {
-    let home = home_dir();
+/// Browser roots that hold one folder per profile. Only cache folders inside a
+/// profile become targets. Cookies, history, and saved passwords stay out.
+const BROWSER_ROOTS: &[(&str, u8, &str)] = &[
+    (".cache/google-chrome", ALL, "Chrome"),
+    (".config/google-chrome", ALL, "Chrome"),
+    (".cache/chromium", ALL, "Chromium"),
+    (".config/chromium", ALL, "Chromium"),
+    (".cache/BraveSoftware/Brave-Browser", ALL, "Brave"),
+    (".config/BraveSoftware/Brave-Browser", ALL, "Brave"),
+    (".mozilla/firefox", ALL, "Firefox"),
+    ("Library/Application Support/Google/Chrome", MACOS, "Chrome"),
+    (
+        "Library/Application Support/Firefox/Profiles",
+        MACOS,
+        "Firefox",
+    ),
+    ("AppData/Local/Google/Chrome/User Data", WINDOWS, "Chrome"),
+    ("AppData/Local/Microsoft/Edge/User Data", WINDOWS, "Edge"),
+    (
+        "AppData/Roaming/Mozilla/Firefox/Profiles",
+        WINDOWS,
+        "Firefox",
+    ),
+];
+
+const BROWSER_CACHE_NAMES: &[&str] = &["Cache", "Code Cache", "GPUCache", "cache2"];
+
+fn browser_cache_targets(home: &Path, platform: Platform) -> Vec<CleanTarget> {
+    let mut out = Vec::new();
+    for (rel, bits, browser) in BROWSER_ROOTS {
+        if bits & platform.bit() == 0 {
+            continue;
+        }
+        let Ok(rd) = fs::read_dir(home.join(rel)) else {
+            continue;
+        };
+        for profile in rd.flatten() {
+            let Ok(md) = fs::symlink_metadata(profile.path()) else {
+                continue;
+            };
+            if !md.is_dir() || md.file_type().is_symlink() {
+                continue;
+            }
+            let profile_name = profile.file_name().to_string_lossy().into_owned();
+            for name in BROWSER_CACHE_NAMES {
+                let cache = profile.path().join(name);
+                let Ok(cd) = fs::symlink_metadata(&cache) else {
+                    continue;
+                };
+                if !cd.is_dir() || cd.file_type().is_symlink() {
+                    continue;
+                }
+                out.push(CleanTarget {
+                    bytes: dir_size(&cache),
+                    path: cache,
+                    label: format!("{browser} cache"),
+                    detail: format!("{profile_name} profile. The browser rebuilds this."),
+                    kind: Kind::Cache,
+                    impact: Impact::Safe,
+                    tool: None,
+                    default_on: false,
+                });
+            }
+        }
+    }
+    out
+}
+
+/// Builds the reclaimable list for one platform. The clock is injected so age
+/// rules can be tested without waiting.
+pub fn clean_targets_with(home: &Path, platform: Platform, now: SystemTime) -> Vec<CleanTarget> {
     let mut out = Vec::new();
     for (rel, kind, label, detail, impact, default_on) in RULES {
+        if platforms_for(rel) & platform.bit() == 0 {
+            continue;
+        }
         let path = home.join(rel);
         let Ok(md) = fs::symlink_metadata(&path) else {
             continue;
@@ -583,12 +731,22 @@ pub fn clean_targets() -> Vec<CleanTarget> {
         } else {
             None
         };
+        let age = min_age_for(rel);
+        let cutoff = (age > 0)
+            .then(|| now.checked_sub(Duration::from_secs(age)))
+            .flatten();
+        let bytes = if md.is_dir() {
+            dir_size_with(&path, skip, cutoff)
+        } else if cutoff.is_some_and(|t| md.modified().is_ok_and(|m| m > t)) {
+            0
+        } else {
+            md.len()
+        };
+        if cutoff.is_some() && bytes == 0 {
+            continue;
+        }
         out.push(CleanTarget {
-            bytes: if md.is_dir() {
-                dir_size_skip(&path, skip)
-            } else {
-                md.len()
-            },
+            bytes,
             path,
             label: (*label).into(),
             detail: (*detail).into(),
@@ -598,16 +756,24 @@ pub fn clean_targets() -> Vec<CleanTarget> {
             default_on: *default_on,
         });
     }
+    out.extend(browser_cache_targets(home, platform));
     if !home.as_os_str().is_empty() {
         let known: HashSet<PathBuf> = RULES
             .iter()
+            .filter(|(rel, _, _, _, _, _)| platforms_for(rel) & platform.bit() != 0)
             .map(|(rel, _, _, _, _, _)| home.join(rel))
             .collect();
-        discover(&home, &known, &mut out);
+        discover(home, &known, &mut out);
     }
-    out.extend(tool_targets());
+    if platform == Platform::Linux {
+        out.extend(tool_targets());
+    }
     out.sort_by_key(|v| std::cmp::Reverse(v.bytes));
     out
+}
+
+pub fn clean_targets() -> Vec<CleanTarget> {
+    clean_targets_with(&home_dir(), Platform::current(), SystemTime::now())
 }
 
 fn under_home(path: &Path, home: &Path) -> bool {
@@ -637,10 +803,6 @@ fn valid_target(t: &CleanTarget, home: &Path) -> io::Result<()> {
 
 pub fn history_path_with(home: &Path) -> PathBuf {
     home.join(".local/share/cleanx/history.log")
-}
-
-pub fn history_path() -> PathBuf {
-    history_path_with(&home_dir())
 }
 
 /// Size left after an owning tool ran. The journal tool reports its own usage;
@@ -874,6 +1036,98 @@ mod tests {
         let cmd = command_line(targets[0].tool.as_ref().unwrap());
         assert!(cmd.contains("--noninteractive"));
         assert!(cmd.contains("-y"));
+    }
+
+    #[test]
+    fn rules_are_selected_by_platform() {
+        let rels = |platform: Platform| -> Vec<&str> {
+            RULES
+                .iter()
+                .filter(|(rel, _, _, _, _, _)| platforms_for(rel) & platform.bit() != 0)
+                .map(|(rel, _, _, _, _, _)| *rel)
+                .collect()
+        };
+        let linux = rels(Platform::Linux);
+        assert!(linux.contains(&".cache"));
+        assert!(
+            !linux
+                .iter()
+                .any(|r| r.starts_with("Library/") || r.starts_with("AppData/"))
+        );
+
+        let macos = rels(Platform::Macos);
+        assert!(macos.contains(&"Library/Caches"));
+        assert!(macos.contains(&".Trash"));
+        assert!(macos.contains(&"Library/Developer/Xcode/DerivedData"));
+        assert!(!macos.contains(&"AppData/Local/Temp"));
+
+        let windows = rels(Platform::Windows);
+        assert!(windows.contains(&"AppData/Local/Temp"));
+        assert!(windows.contains(&"AppData/Local/CrashDumps"));
+        assert!(!windows.contains(&"Library/Caches"));
+        assert_eq!(min_age_for("AppData/Local/Temp"), THREE_DAYS);
+        assert_eq!(min_age_for(".cache"), 0);
+    }
+
+    #[test]
+    fn aged_temp_rule_counts_only_old_files() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("cleanx-age-{}-{nanos}", std::process::id()));
+        let home = base.join("home");
+        let temp = home.join("AppData/Local/Temp");
+        fs::create_dir_all(&temp).unwrap();
+        let fresh = temp.join("fresh.tmp");
+        let old = temp.join("old.tmp");
+        fs::write(&fresh, b"1234567890").unwrap();
+        fs::write(&old, b"abcd").unwrap();
+        let past = SystemTime::now() - Duration::from_secs(10 * 24 * 60 * 60);
+        fs::File::open(&old).unwrap().set_modified(past).unwrap();
+
+        let windows = clean_targets_with(&home, Platform::Windows, SystemTime::now());
+        let temp_target = windows.iter().find(|t| t.label == "App temp").unwrap();
+        assert_eq!(temp_target.bytes, 4);
+
+        let linux = clean_targets_with(&home, Platform::Linux, SystemTime::now());
+        assert!(linux.iter().all(|t| t.label != "App temp"));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn browser_caches_are_found_in_every_profile() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base =
+            std::env::temp_dir().join(format!("cleanx-browser-{}-{nanos}", std::process::id()));
+        let home = base.join("home");
+        let root = home.join("AppData/Local/Google/Chrome/User Data");
+        for profile in ["Default", "Profile 1"] {
+            let cache = root.join(profile).join("Cache");
+            fs::create_dir_all(&cache).unwrap();
+            fs::write(cache.join("data"), b"0123456789").unwrap();
+        }
+
+        let windows = clean_targets_with(&home, Platform::Windows, SystemTime::now());
+        let caches: Vec<_> = windows
+            .iter()
+            .filter(|t| t.label == "Chrome cache")
+            .collect();
+        assert_eq!(caches.len(), 2);
+        assert!(caches.iter().all(|t| t.bytes == 10));
+        assert!(caches.iter().all(|t| t.impact.cleanable()));
+        assert!(
+            caches
+                .iter()
+                .all(|t| !t.path.to_string_lossy().contains("Cookies"))
+        );
+
+        let linux = clean_targets_with(&home, Platform::Linux, SystemTime::now());
+        assert!(linux.iter().all(|t| t.label != "Chrome cache"));
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

@@ -9,7 +9,8 @@ mod session;
 
 use rune::tok::{self, motion, radius, space};
 use rune::{
-    AppSpec, Color, Cx, El, LineCap, ScrollSpec, Shape, canvas, col, effect, el, oklch, row, text,
+    AppSpec, Color, Cx, Drag, El, LineCap, Phase, ScrollSpec, Shape, Tx, canvas, col, effect, el,
+    oklch, row, text,
 };
 
 /// One type scale for the app; Rune's tokens are 11.5–13 px, too small here.
@@ -120,7 +121,7 @@ fn fx(mark: u32, data: [f32; 4]) -> El {
 
 /// Wedges around a common centre. Each wedge grows in turn during a scan.
 /// Rune has no chart primitive, so the sunburst is generated polygon geometry.
-fn sunburst(progress: f32, hue: f32) -> Shape {
+fn sunburst(progress: f32, hue: f32, phase: f32) -> Shape {
     const SLICES: u32 = 9;
     const STEP: f32 = std::f32::consts::TAU / SLICES as f32;
     let mut shape = Shape::new().view_box(120.0, 120.0);
@@ -129,7 +130,7 @@ fn sunburst(progress: f32, hue: f32) -> Shape {
         if grow <= 0.0 {
             continue;
         }
-        let a0 = i as f32 * STEP - std::f32::consts::FRAC_PI_2;
+        let a0 = i as f32 * STEP - std::f32::consts::FRAC_PI_2 + phase;
         let a1 = a0 + STEP * 0.82;
         let inner = 19.0;
         let outer = inner + 39.0 * grow;
@@ -549,6 +550,14 @@ fn space_view(
                         .motion(motion::DEFAULT)
                         .focusable(true)
                         .on_press(|s: &mut State| s.tab = Tab::Clean)
+                        .on_drag(|s: &mut State, d: &mut Drag, _: &mut Tx| {
+                            let angle = (d.y - d.h / 2.0).atan2(d.x - d.w / 2.0);
+                            match d.phase {
+                                Phase::Down => s.session.spin_drag_start(angle),
+                                Phase::Move => s.session.spin_drag_move(angle),
+                                Phase::Up => s.session.spin_drag_end(),
+                            }
+                        })
                         .center()
                         .child(
                             fx(gfx::LAVA, [0.26, 0.45, 0.0, 0.0])
@@ -560,6 +569,17 @@ fn space_view(
                                 .key("orb-glow")
                                 .radius(106.0)
                                 .effect_bleed(160.0),
+                        )
+                        .child(
+                            canvas(sunburst(
+                                s.session.scan_progress(),
+                                hue,
+                                s.session.spin_phase(),
+                            ))
+                            .key("sunburst")
+                            .absolute(0.0, 0.0)
+                            .size(212.0, 212.0)
+                            .opacity(0.9),
                         )
                         .child(
                             col()
@@ -583,11 +603,6 @@ fn space_view(
                         .grow(1.0)
                         .min_w(0.0)
                         .gap(space::S3)
-                        .child(
-                            canvas(sunburst(s.session.scan_progress(), hue))
-                                .key("sunburst")
-                                .size(120.0, 120.0),
-                        )
                         .child(text("scan coverage").font(type_::SECTION).color(secondary))
                         .child(
                             text(mood_text)

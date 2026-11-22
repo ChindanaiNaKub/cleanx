@@ -1,0 +1,42 @@
+name: verify
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned Rune tree
+        shell: bash
+        run: bash scripts/rune.sh
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - name: Format
+        shell: bash
+        run: cargo fmt -- --check
+      - name: Unit tests
+        shell: bash
+        run: cargo test
+
+  scenes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned Rune tree
+        shell: bash
+        run: bash scripts/rune.sh
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - name: Snapshots and scene checks
+        shell: bash
+        run: bash scripts/verify.sh
