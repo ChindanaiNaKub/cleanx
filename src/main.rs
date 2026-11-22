@@ -9,8 +9,8 @@ mod session;
 
 use rune::tok::{self, motion, radius, space};
 use rune::{
-    AppSpec, Color, Cx, Drag, El, LineCap, Phase, ScrollSpec, Shape, Tx, canvas, col, effect, el,
-    oklch, row, text,
+    AppSpec, Color, Cx, Drag, El, LineCap, Phase, ScrollSpec, Shape, Transition, Tx, canvas, col,
+    effect, el, oklch, row, text,
 };
 
 /// One type scale for the app; Rune's tokens are 11.5–13 px, too small here.
@@ -1238,10 +1238,11 @@ fn clean_view(
         )
         .child(match &s.notice {
             Some(msg) => text(msg)
-                .key("notice")
+                .key(format!("notice-{msg}"))
+                .transition(Transition::offset(0.0, space::S2).combined(Transition::opacity()))
                 .font(type_::LABEL)
                 .color(oklch(0.8, 0.14, 155.0)),
-            None => el().key("notice").h(0.0),
+            None => el().key("notice-off").h(0.0),
         })
         .child(
             col()
@@ -1563,5 +1564,28 @@ mod tests {
         rt.pointer_up(x, y);
         rt.frame(0.0);
         assert!(rt.state.session.armed());
+    }
+
+    #[test]
+    fn a_new_notice_enters_with_a_transition() {
+        let mut state = State::default();
+        state.tab = Tab::Clean;
+        state.session.clear_candidates();
+        let mut rt = Runtime::new(state, view, (760.0, 600.0), Env::new(true, 1.0));
+        rt.frame(0.0);
+        assert!(rt.find("notice-off").is_some());
+
+        let (x, y) = rt.find("clean-button").unwrap();
+        rt.pointer_down(x, y);
+        rt.pointer_up(x, y);
+        rt.frame(0.0);
+        let key = format!("notice-{}", rt.state.notice.as_deref().unwrap());
+        assert!(rt.find("notice-off").is_none());
+        let entered = rt
+            .elements()
+            .into_iter()
+            .find(|e| e.key.as_deref() == Some(key.as_str()))
+            .expect("the new notice mounts under its own key");
+        assert!(entered.opacity < 1.0, "the new notice fades in");
     }
 }
