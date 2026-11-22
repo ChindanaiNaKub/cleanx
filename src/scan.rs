@@ -1084,7 +1084,12 @@ mod tests {
         fs::write(&fresh, b"1234567890").unwrap();
         fs::write(&old, b"abcd").unwrap();
         let past = SystemTime::now() - Duration::from_secs(10 * 24 * 60 * 60);
-        fs::File::open(&old).unwrap().set_modified(past).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&old)
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
 
         let windows = clean_targets_with(&home, Platform::Windows, SystemTime::now());
         let temp_target = windows.iter().find(|t| t.label == "App temp").unwrap();
