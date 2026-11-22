@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# Install a prebuilt cleanX binary from the latest GitHub release.
+# Install a prebuilt cleanX binary from the newest GitHub release, including betas.
 # No Rust toolchain needed. For macOS and Linux only.
 set -euo pipefail
 
 REPO="ChindanaiNaKub/cleanx"
-BASE="https://github.com/$REPO/releases/latest/download"
+TAG=$(curl -fsSL "https://api.github.com/repos/$REPO/releases" | grep -m1 '"tag_name"' | cut -d'"' -f4 || true)
+if [ -z "$TAG" ]; then
+  echo "No release found for $REPO" >&2
+  exit 1
+fi
+BASE="https://github.com/$REPO/releases/download/$TAG"
 DEST="$HOME/.local/bin"
 
 case "$(uname -s)" in

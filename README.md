@@ -21,16 +21,18 @@ The Space tab draws a lava orb that shows free space and warms as the disk fills
 
 The Clean tab lists known caches, temp folders, trash, `.DS_Store` files, `node_modules` folders, and large or hidden files it finds under home. On Fedora it also lists the dnf package cache, journal logs and unused Flatpak runtimes. Select rows, arm the action, then press again to clean. Path items move to quarantine and get an Undo button. Protected folders such as `.config` and `.ssh` are reported but never offered. System tools do not get undo.
 
-## Download (no setup needed)
+## Download (beta, no setup needed)
 
-Grab a ready-made binary from the [Releases page](https://github.com/ChindanaiNaKub/cleanx/releases/latest). No Rust or git needed.
+Grab a beta binary from the [Releases page](https://github.com/ChindanaiNaKub/cleanx/releases). No Rust or git needed.
 
 - **Windows:** download `cleanx-windows-x86_64.exe` and double-click it.
 - **macOS (Intel and Apple Silicon) and Linux x86_64:** run `curl -fsSL https://raw.githubusercontent.com/ChindanaiNaKub/cleanx/main/scripts/install-binary.sh | bash`.
 
 The script puts `cleanx` in `~/.local/bin`. Add that folder to your `PATH`.
 
-Windows and macOS binaries are built in CI but have not been tested on real hardware yet. Linux is the only verified build. See Platform support and roadmap.
+These are beta builds. Windows and macOS binaries are built in CI but have not been tested on real hardware. Linux is the only verified build. Expect bugs. See Platform support and roadmap.
+
+We need testers. Download a binary, use it, and tell us what breaks by [opening an issue](https://github.com/ChindanaiNaKub/cleanx/issues). Include your OS, how you installed the app, and what you expected. Back up files you cannot afford to lose before you run a beta build.
 
 ## Run it
 
