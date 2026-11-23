@@ -21,18 +21,18 @@ The Space tab draws a lava orb that shows free space and warms as the disk fills
 
 The Clean tab lists known caches, temp folders, trash, `.DS_Store` files, `node_modules` folders, and large or hidden files it finds under home. On Fedora it also lists the dnf package cache, journal logs and unused Flatpak runtimes. Select rows, arm the action, then press again to clean. Path items move to quarantine and get an Undo button. Protected folders such as `.config` and `.ssh` are reported but never offered. System tools do not get undo.
 
-## Download (beta, no setup needed)
+## Download (no setup needed)
 
-Grab a beta binary from the [Releases page](https://github.com/ChindanaiNaKub/cleanx/releases). No Rust or git needed.
+Grab a binary from the [Releases page](https://github.com/ChindanaiNaKub/cleanx/releases). No Rust or git needed.
 
 - **Windows:** download `cleanx-windows-x86_64.exe` and double-click it.
 - **macOS (Intel and Apple Silicon) and Linux x86_64:** run `curl -fsSL https://raw.githubusercontent.com/ChindanaiNaKub/cleanx/main/scripts/install-binary.sh | bash`.
 
 The script puts `cleanx` in `~/.local/bin`. Add that folder to your `PATH`.
 
-These are beta builds. Windows and macOS binaries are built in CI but have not been tested on real hardware. Linux is the only verified build. Expect bugs. See Platform support and roadmap.
+Binaries are built in CI for Linux, Windows, macOS Intel and macOS Apple Silicon. The app runs on real hardware on Linux, macOS and Windows. See Platform support.
 
-We need testers. Download a binary, use it, and tell us what breaks by [opening an issue](https://github.com/ChindanaiNaKub/cleanx/issues). Include your OS, how you installed the app, and what you expected. Back up files you cannot afford to lose before you run a beta build.
+Found a bug? [Open an issue](https://github.com/ChindanaiNaKub/cleanx/issues). Include your OS, how you installed the app, and what you expected. Back up files you cannot afford to lose before you clean.
 
 ## Run it
 
@@ -44,14 +44,14 @@ git clone https://github.com/ChindanaiNaKub/cleanx.git && cd cleanx && bash scri
 
 From a checkout next to `../rune-src`, `cargo run --` starts the app without installing.
 
-Scenes render headlessly with `cargo run -- --snap out.png --scene clean`. Scenes are `clean`, `confirm`, `burst`, `burst-control`, `undo`, `empty`, `low` and `isolated`. Run `cargo test` for unit tests. Run `scripts/verify.sh` to check formatting, tests and every scene.
+Scenes render headlessly with `cargo run -- --snap out.png --scene clean`, or with `cleanx --snap out.png --scene clean` from a downloaded binary. Scenes are `clean`, `confirm`, `burst`, `burst-control`, `undo`, `empty`, `low` and `isolated`. Run `cargo test` for unit tests. Run `scripts/verify.sh` to check formatting, tests and every scene.
 
-## Platform support and roadmap
+## Platform support
 
 - Fedora, today. The full clean list and the dnf, journalctl and Flatpak tools work here.
 - Linux, today. The dashboard and the cache, temp and trash list work on any Unix-like system with `df`.
-- macOS, next. The allow-list already covers Caches, Logs and Trash. Rendering needs the Metal backend and local testing.
-- Windows, next. The allow-list already covers the temp folder and reads `USERPROFILE`. Rendering needs the DirectX 12 backend and local testing.
+- macOS, today. Tested on Apple Silicon with the Metal backend. An Intel binary is available too. The allow-list covers Caches, Logs and Trash.
+- Windows, today. Tested on real hardware with the DirectX 12 backend. The allow-list covers the temp folder and reads `USERPROFILE`.
 
 ## How it stays safe
 
@@ -70,7 +70,7 @@ Scenes render headlessly with `cargo run -- --snap out.png --scene clean`. Scene
 - The scanner follows no symlinks. Discovery stops at 30,000 entries and size counting at 40,000 files. Reported sizes may be samples for very large trees.
 - Held items survive a restart but stay on disk until you clear them. Clearing held cannot be undone.
 - Category totals cover home only. They are not the whole volume's used space from `df`.
-- The app needs a GPU with a supported Vulkan driver on Linux. Headless snapshots use the same renderer.
+- The app needs a GPU with a supported backend: Vulkan on Linux, Metal on macOS and DirectX 12 on Windows. Headless snapshots use the same renderer.
 - No build command or test removes a file. Only a confirmed clean moves path items to quarantine.
 
 ## Contributing

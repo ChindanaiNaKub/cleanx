@@ -51,6 +51,6 @@ jobs:
       - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
-          prerelease: true
-          body_path: .github/beta-release-notes.md
+          prerelease: ${{ contains(github.ref_name, '-beta') }}
+          body_path: ${{ contains(github.ref_name, '-beta') && '.github/beta-release-notes.md' || '.github/release-notes.md' }}
           files: ${{ matrix.asset }}
