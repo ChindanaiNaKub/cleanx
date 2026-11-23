@@ -9,7 +9,9 @@ publish = false
 [workspace]
 
 [dependencies]
-rune = { path = "../rune-src/crates/rune", default-features = true }
+# `tooling` is off by default in release builds (Rune enables it in debug
+# builds only). The documented headless commands need it in shipped binaries.
+rune = { path = "../rune-src/crates/rune", default-features = true, features = ["tooling"] }
 rune-fx = { path = "../rune-src/crates/rune-fx" }
 wgpu = { version = "~30.0.1", features = ["std", "parking_lot", "wgsl"] }
 
